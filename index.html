@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grappa</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="drop">Drop an image here, click to choose, or paste from clipboard</div>
+  <input type="file" id="file" accept="image/*" hidden>
+
+  <div id="controls" hidden>
+    <div class="row">
+      <label>Colors to pick: <span id="nval">6</span></label>
+      <input type="range" id="ncolors" min="2" max="16" value="6">
+    </div>
+    <div class="row">
+      <label>Color: <span id="aval">70</span>%</label>
+      <input type="range" id="accent" min="0" max="100" value="70">
+    </div>
+    <div class="row">
+      <label>Saturation: <span id="sval">100</span>%</label>
+      <input type="range" id="sat" min="0" max="300" value="100">
+    </div>
+    <div class="row">
+      <label>Strength: <span id="bval">100</span>%</label>
+      <input type="range" id="blend" min="0" max="100" value="100">
+    </div>
+  </div>
+
+  <div id="result" hidden>
+    <div class="previews">
+      <figure>
+        <figcaption>Original</figcaption>
+        <canvas id="cOrig"></canvas>
+      </figure>
+      <figure>
+        <figcaption>Graded preview</figcaption>
+        <canvas id="cGraded"></canvas>
+      </figure>
+    </div>
+
+    <canvas id="gradbar" width="512" height="40"></canvas>
+    <div class="swatches" id="swatches"></div>
+
+    <div class="row">
+      <button id="dlCube">Download .cube LUT</button>
+      <button id="dlPng">Download gradient PNG</button>
+      <button id="copyHex">Copy hex list</button>
+    </div>
+  </div>
+
+<canvas id="work" hidden></canvas>
+<script src="app.js"></script>
+</body>
+</html>
