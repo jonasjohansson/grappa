@@ -167,6 +167,10 @@
     var data = wctx.getImageData(0, 0, w, h).data;
 
     // [sumR, sumG, sumB, satR, satG, satB, satW, count]
+    // The accent accumulator weights each pixel by saturation^chromaPow. A
+    // higher power lets a small vivid region (e.g. a red glow) dominate its
+    // luminance band instead of being averaged into the surrounding greys.
+    var chromaPow = 1 + accentMix * 3;   // 1 (plain) .. 4 (very selective)
     var fine = new Array(256);
     for (var i = 0; i < 256; i++) fine[i] = [0, 0, 0, 0, 0, 0, 0, 0];
     for (var p = 0; p < data.length; p += 4) {
@@ -175,9 +179,10 @@
       var L = Math.round(lum(r, g, b));
       var mx = Math.max(r, g, b), mn = Math.min(r, g, b);
       var sat = mx > 0 ? (mx - mn) / 255 : 0;
+      var wc = Math.pow(sat, chromaPow);
       var f = fine[L];
       f[0] += r; f[1] += g; f[2] += b;
-      f[3] += r * sat; f[4] += g * sat; f[5] += b * sat; f[6] += sat; f[7] += 1;
+      f[3] += r * wc; f[4] += g * wc; f[5] += b * wc; f[6] += wc; f[7] += 1;
     }
     var avg = fine.map(function (f) { return f[7] ? [f[0] / f[7], f[1] / f[7], f[2] / f[7]] : null; });
     function nearest(idx) {
