@@ -96,9 +96,8 @@ canvas { max-width: 100%; display: block; }
 .sw { font-size: var(--font-tiny); text-align: center; }
 .sw .chip { width: var(--chip-w); height: var(--chip-h); border: var(--border-w) solid var(--border-color); }
 
-#presets { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-1) 0 var(--space-3); }
-.preset { display: inline-flex; align-items: center; border: var(--border-w) solid var(--border-color); }
-.preset button { border: 0; background: none; cursor: pointer; font-size: var(--font-tiny); padding: var(--space-1) var(--space-2); }
-.preset button:last-child { border-left: var(--border-w) solid var(--border-color); color: var(--muted); }
-
 .picker { position: fixed; left: -9999px; width: 0; height: 0; opacity: 0; }
+
+/* eyedropper sampling */
+button.on { background: var(--accent); color: var(--white); }
+#cOrig.eyedrop { cursor: crosshair; }

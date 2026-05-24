@@ -52,8 +52,9 @@
     <div id="stops"></div>
     <div class="row">
       <button id="addStop">+ stop</button>
+      <button id="eyedrop">Eyedrop</button>
       <button id="reExtract">Re-extract</button>
-      <span class="hint">drag / arrow keys to move · double-click to recolor · click + Delete to remove</span>
+      <span class="hint">Eyedrop, then click the image to pick a color the auto-pass missed · drag / arrow keys to move · double-click to recolor · click + Delete to remove</span>
     </div>
     <div class="swatches" id="swatches"></div>
 
@@ -70,12 +71,6 @@
       <button id="copyHex">Copy hex list</button>
       <button id="shareBtn">Copy share link</button>
     </div>
-
-    <div class="row">
-      <input id="presetName" placeholder="preset name">
-      <button id="savePreset">Save preset</button>
-    </div>
-    <div id="presets"></div>
 
     <div id="dropTarget">Drop a target frame to preview the grade on real footage (optional)</div>
     <input type="file" id="fileTarget" accept="image/*" hidden>

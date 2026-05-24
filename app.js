@@ -52,10 +52,9 @@
     oklab: $("oklab"),
     cOrig: $("cOrig"), cGraded: $("cGraded"),
     gradbar: $("gradbar"), stops: $("stops"), swatches: $("swatches"),
-    addStop: $("addStop"), reExtract: $("reExtract"), picker: $("picker"),
+    addStop: $("addStop"), eyedrop: $("eyedrop"), reExtract: $("reExtract"), picker: $("picker"),
     lutSize: $("lutSize"),
     dlCube: $("dlCube"), dlPng: $("dlPng"), copyHex: $("copyHex"), shareBtn: $("shareBtn"),
-    presetName: $("presetName"), savePreset: $("savePreset"), presets: $("presets"),
     dropTarget: $("dropTarget"), fileTarget: $("fileTarget"),
     targetFig: $("targetFig"), cTarget: $("cTarget"), dlTarget: $("dlTarget"),
     work: $("work")
@@ -156,7 +155,16 @@
   els.lutSize.addEventListener("change", function () { localStorage.setItem("gm_lutsize", els.lutSize.value); });
   els.reExtract.addEventListener("click", function () { recompute(); });
 
-  // ---------- analysis (luminance bins + accent sampling) ----------
+  // ---------- analysis (luminance bins + dominant-hue accent) ----------
+  // A gradient map keys output color on input luminance, so each stop is the
+  // representative color of one brightness band. Two things matter per band:
+  //   1. the dominant *tone* — the plain mean of every pixel, and
+  //   2. the dominant *vivid hue* — which must NOT be a chroma average, or an
+  //      orange glow and a blue sky at the same brightness cancel into mud.
+  // So we histogram each band by hue (weighted by saturation^chromaPow) and let
+  // the single most-saturated hue cluster define the accent. A vivid minority
+  // hue beats a majority of greys (greys carry ~no weight) but still yields to a
+  // larger, equally-vivid cluster — the best a one-color-per-brightness LUT can do.
   function analyze(N, accentMix) {
     var im = state.img;
     var maxDim = 500, scale = Math.min(1, maxDim / Math.max(im.width, im.height));
@@ -166,25 +174,31 @@
     wctx.drawImage(im, 0, 0, w, h);
     var data = wctx.getImageData(0, 0, w, h).data;
 
-    // [sumR, sumG, sumB, satR, satG, satB, satW, count]
-    // The accent accumulator weights each pixel by saturation^chromaPow. A
-    // higher power lets a small vivid region (e.g. a red glow) dominate its
-    // luminance band instead of being averaged into the surrounding greys.
     var chromaPow = 1 + accentMix * 3;   // 1 (plain) .. 4 (very selective)
-    var fine = new Array(256);
-    for (var i = 0; i < 256; i++) fine[i] = [0, 0, 0, 0, 0, 0, 0, 0];
+    var HB = 24;                          // hue bins (15° each) — enough to separate blue from orange
+    // tot[L]  = [sumR, sumG, sumB, count]  — plain tone average
+    // hist[L] = HB groups of [wR, wG, wB, w], colors weighted by saturation^chromaPow
+    var tot = new Array(256), hist = new Array(256);
+    for (var i = 0; i < 256; i++) { tot[i] = [0, 0, 0, 0]; hist[i] = new Float64Array(HB * 4); }
+
     for (var p = 0; p < data.length; p += 4) {
       if (data[p + 3] < 8) continue;
       var r = data[p], g = data[p + 1], b = data[p + 2];
       var L = Math.round(lum(r, g, b));
-      var mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-      var sat = mx > 0 ? (mx - mn) / 255 : 0;
-      var wc = Math.pow(sat, chromaPow);
-      var f = fine[L];
-      f[0] += r; f[1] += g; f[2] += b;
-      f[3] += r * wc; f[4] += g * wc; f[5] += b * wc; f[6] += wc; f[7] += 1;
+      var t = tot[L]; t[0] += r; t[1] += g; t[2] += b; t[3] += 1;
+      var mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+      if (d === 0) continue;             // achromatic: no hue to bin
+      var hh;                            // hue in [0,1)
+      if (mx === r) hh = ((g - b) / d) % 6;
+      else if (mx === g) hh = (b - r) / d + 2;
+      else hh = (r - g) / d + 4;
+      hh /= 6; if (hh < 0) hh += 1;
+      var wc = Math.pow(d / 255, chromaPow);
+      var o = (Math.floor(hh * HB) % HB) * 4, ha = hist[L];
+      ha[o] += r * wc; ha[o + 1] += g * wc; ha[o + 2] += b * wc; ha[o + 3] += wc;
     }
-    var avg = fine.map(function (f) { return f[7] ? [f[0] / f[7], f[1] / f[7], f[2] / f[7]] : null; });
+
+    var avg = tot.map(function (f) { return f[3] ? [f[0] / f[3], f[1] / f[3], f[2] / f[3]] : null; });
     function nearest(idx) {
       for (var d = 0; d < 256; d++) {
         if (idx - d >= 0 && avg[idx - d]) return avg[idx - d];
@@ -194,13 +208,13 @@
     }
     // robust luminance range (ignore ~0.5% outliers at each end)
     var total = 0;
-    for (var t = 0; t < 256; t++) total += fine[t][7];
+    for (var ti = 0; ti < 256; ti++) total += tot[ti][3];
     var Lmin = 0, Lmax = 255;
     if (total > 0) {
       var cut = total * 0.005, cum = 0;
-      for (var lo = 0; lo < 256; lo++) { cum += fine[lo][7]; if (cum >= cut) { Lmin = lo; break; } }
+      for (var lo = 0; lo < 256; lo++) { cum += tot[lo][3]; if (cum >= cut) { Lmin = lo; break; } }
       cum = 0;
-      for (var hi = 255; hi >= 0; hi--) { cum += fine[hi][7]; if (cum >= cut) { Lmax = hi; break; } }
+      for (var hi = 255; hi >= 0; hi--) { cum += tot[hi][3]; if (cum >= cut) { Lmax = hi; break; } }
       if (Lmax <= Lmin) { Lmin = 0; Lmax = 255; }
     }
     var stops = [];
@@ -208,16 +222,28 @@
     for (var s = 0; s < N; s++) {
       var pos = s / (N - 1);
       var center = Math.round(Lmin + pos * (Lmax - Lmin));
-      var mR = 0, mG = 0, mB = 0, mN = 0, aR = 0, aG = 0, aB = 0, aW = 0;
+      var mR = 0, mG = 0, mB = 0, mN = 0, acc = new Float64Array(HB * 4);
       for (var k = center - half; k <= center + half; k++) {
-        if (k >= 0 && k < 256 && fine[k][7]) {
-          var fk = fine[k];
-          mR += fk[0]; mG += fk[1]; mB += fk[2]; mN += fk[7];
-          aR += fk[3]; aG += fk[4]; aB += fk[5]; aW += fk[6];
-        }
+        if (k < 0 || k >= 256) continue;
+        var fk = tot[k]; mR += fk[0]; mG += fk[1]; mB += fk[2]; mN += fk[3];
+        var hk = hist[k]; for (var q = 0; q < HB * 4; q++) acc[q] += hk[q];
       }
       var meanCol = mN ? [mR / mN, mG / mN, mB / mN] : nearest(center);
-      var accentCol = aW > 0.001 ? [aR / aW, aG / aW, aB / aW] : meanCol;
+      // dominant hue, pooled with neighbors so a cluster split across a bin edge isn't penalized
+      var best = -1, bestW = 0;
+      for (var hb = 0; hb < HB; hb++) {
+        var score = acc[hb * 4 + 3]
+          + 0.5 * (acc[((hb - 1 + HB) % HB) * 4 + 3] + acc[((hb + 1) % HB) * 4 + 3]);
+        if (score > bestW) { bestW = score; best = hb; }
+      }
+      var accentCol = meanCol;
+      if (best >= 0) {
+        var R = 0, G = 0, B = 0, W = 0;
+        [(best - 1 + HB) % HB, best, (best + 1) % HB].forEach(function (bin) {
+          var bo = bin * 4; R += acc[bo]; G += acc[bo + 1]; B += acc[bo + 2]; W += acc[bo + 3];
+        });
+        if (W > 0.001) accentCol = [R / W, G / W, B / W];
+      }
       stops.push({ pos: pos, col: [
         meanCol[0] + (accentCol[0] - meanCol[0]) * accentMix,
         meanCol[1] + (accentCol[1] - meanCol[1]) * accentMix,
@@ -385,6 +411,39 @@
     state.stops.push({ pos: 0.5, col: state.ramp ? state.ramp[128].slice() : [128, 128, 128] });
     state.manual = true; selIdx = state.stops.length - 1; rebuildAndRender();
   });
+
+  // ---------- eyedropper: sample a color and add it at its matching brightness ----------
+  // The gradient map is keyed on luminance, so a sampled color belongs at the
+  // position equal to its own brightness — that's where it will actually appear.
+  function addColorStop(rgb) {
+    state.stops.push({ pos: lum(rgb[0], rgb[1], rgb[2]) / 255, col: rgb.slice() });
+    state.manual = true; selIdx = state.stops.length - 1; rebuildAndRender();
+  }
+  var eyedropArmed = false;
+  function setArmed(on) {
+    eyedropArmed = on;
+    els.eyedrop.classList.toggle("on", on);
+    els.cOrig.classList.toggle("eyedrop", on);
+  }
+  els.eyedrop.addEventListener("click", function () {
+    if (!state.img) return;
+    if (window.EyeDropper) {
+      new EyeDropper().open()
+        .then(function (res) { addColorStop(hexToRgb(res.sRGBHex)); })
+        .catch(function () {}); // user pressed Esc
+    } else {
+      setArmed(!eyedropArmed); // fallback: click the original canvas to sample
+    }
+  });
+  els.cOrig.addEventListener("click", function (e) {
+    if (!eyedropArmed || !els.cOrig.width) return;
+    var rect = els.cOrig.getBoundingClientRect();
+    var x = Math.floor((e.clientX - rect.left) / rect.width * els.cOrig.width);
+    var y = Math.floor((e.clientY - rect.top) / rect.height * els.cOrig.height);
+    var px = els.cOrig.getContext("2d").getImageData(x, y, 1, 1).data;
+    addColorStop([px[0], px[1], px[2]]);
+    setArmed(false);
+  });
   function openPicker(i) {
     selIdx = i; markSel();
     els.picker.value = hex(state.stops[i].col.map(Math.round));
@@ -439,7 +498,7 @@
   });
   function flash(btn, on, off) { btn.textContent = on; setTimeout(function () { btn.textContent = off; }, 1200); }
 
-  // ---------- share + presets ----------
+  // ---------- share link ----------
   function b64e(s) { return btoa(unescape(encodeURIComponent(s))); }
   function b64d(s) { return decodeURIComponent(escape(atob(s))); }
   function serialize() {
@@ -470,27 +529,7 @@
       return true;
     } catch (e) { return false; }
   }
-  function getPresets() { try { return JSON.parse(localStorage.getItem("gm_presets") || "{}"); } catch (e) { return {}; } }
-  function setPresets(p) { localStorage.setItem("gm_presets", JSON.stringify(p)); }
-  function drawPresets() {
-    var p = getPresets(); els.presets.innerHTML = "";
-    Object.keys(p).forEach(function (name) {
-      var wrap = document.createElement("span"); wrap.className = "preset";
-      var load = document.createElement("button"); load.textContent = name;
-      load.addEventListener("click", function () { applyGradient(p[name]); });
-      var del = document.createElement("button"); del.textContent = "×"; del.title = "delete";
-      del.addEventListener("click", function () { var q = getPresets(); delete q[name]; setPresets(q); drawPresets(); });
-      wrap.appendChild(load); wrap.appendChild(del); els.presets.appendChild(wrap);
-    });
-  }
-  els.savePreset.addEventListener("click", function () {
-    if (!state.stops.length) return;
-    var name = (els.presetName.value || "untitled").trim();
-    var p = getPresets(); p[name] = serialize(); setPresets(p); els.presetName.value = ""; drawPresets();
-  });
-
   // ---------- init ----------
   loadSettings();
-  drawPresets();
   if (!loadFromHash()) restoreImage(true);
 })();
