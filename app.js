@@ -52,7 +52,8 @@
     oklab: $("oklab"),
     cOrig: $("cOrig"), cGraded: $("cGraded"),
     gradbar: $("gradbar"), stops: $("stops"), swatches: $("swatches"),
-    addStop: $("addStop"), picker: $("picker"),
+    addStop: $("addStop"), reExtract: $("reExtract"), picker: $("picker"),
+    lutSize: $("lutSize"),
     dlCube: $("dlCube"), dlPng: $("dlPng"), copyHex: $("copyHex"), shareBtn: $("shareBtn"),
     presetName: $("presetName"), savePreset: $("savePreset"), presets: $("presets"),
     dropTarget: $("dropTarget"), fileTarget: $("fileTarget"),
@@ -75,6 +76,8 @@
     });
     var k = localStorage.getItem("gm_oklab");
     if (k !== null) els.oklab.checked = k === "1";
+    var ls = localStorage.getItem("gm_lutsize");
+    if (ls !== null) els.lutSize.value = ls;
   }
 
   function persistImage(im) {
@@ -150,6 +153,8 @@
   els.oklab.addEventListener("change", function () {
     localStorage.setItem("gm_oklab", els.oklab.checked ? "1" : "0"); rebuildAndRender();
   });
+  els.lutSize.addEventListener("change", function () { localStorage.setItem("gm_lutsize", els.lutSize.value); });
+  els.reExtract.addEventListener("click", function () { recompute(); });
 
   // ---------- analysis (luminance bins + accent sampling) ----------
   function analyze(N, accentMix) {
@@ -359,11 +364,17 @@
     if (moved) { state.manual = true; rebuildAndRender(); }
   });
   document.addEventListener("keydown", function (e) {
-    if (e.key !== "Delete" && e.key !== "Backspace") return;
-    if (document.activeElement && /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
-    if (selIdx == null || state.stops.length <= 2) return;
-    state.stops.splice(selIdx, 1); selIdx = null; state.manual = true; rebuildAndRender();
-    e.preventDefault();
+    if (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
+    if ((e.key === "Delete" || e.key === "Backspace") && selIdx != null && state.stops.length > 2) {
+      state.stops.splice(selIdx, 1); selIdx = null; state.manual = true; rebuildAndRender();
+      e.preventDefault(); return;
+    }
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && selIdx != null) {
+      var step = (e.shiftKey ? 0.02 : 0.005) * (e.key === "ArrowRight" ? 1 : -1);
+      state.stops[selIdx].pos = Math.max(0, Math.min(1, state.stops[selIdx].pos + step));
+      state.manual = true; rebuildAndRender();
+      e.preventDefault();
+    }
   });
   els.addStop.addEventListener("click", function () {
     state.stops.push({ pos: 0.5, col: state.ramp ? state.ramp[128].slice() : [128, 128, 128] });
@@ -401,7 +412,7 @@
     }
     return lines.join("\n") + "\n";
   }
-  els.dlCube.addEventListener("click", function () { if (state.ramp) download(state.name + ".cube", new Blob([buildCube(33)], { type: "text/plain" })); });
+  els.dlCube.addEventListener("click", function () { if (state.ramp) download(state.name + ".cube", new Blob([buildCube(parseInt(els.lutSize.value, 10))], { type: "text/plain" })); });
   els.dlPng.addEventListener("click", function () {
     if (!state.ramp) return;
     var c = document.createElement("canvas"); c.width = 1024; c.height = 128;
