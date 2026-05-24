@@ -1,52 +1,82 @@
 (function () {
   "use strict";
-  // Rec.709 luminance
+
+  // ---------- color helpers ----------
   function lum(r, g, b) { return 0.2126 * r + 0.7152 * g + 0.0722 * b; }
   function hex(c) { return "#" + c.map(function (v) { return ("0" + Math.round(v).toString(16)).slice(-2); }).join(""); }
-  // scale chroma around luminance (amt > 1 boosts saturation, < 1 mutes), keeps brightness
+  function rgbCss(c) { return "rgb(" + Math.round(c[0]) + "," + Math.round(c[1]) + "," + Math.round(c[2]) + ")"; }
+  function hexToRgb(h) { h = h.replace("#", ""); return [parseInt(h.substr(0, 2), 16), parseInt(h.substr(2, 2), 16), parseInt(h.substr(4, 2), 16)]; }
+  function clamp255(v) { return Math.max(0, Math.min(255, v)); }
+  // scale chroma around luminance (amt > 1 boosts saturation), keeps brightness
   function saturate(rgb, amt) {
     var L = lum(rgb[0], rgb[1], rgb[2]);
-    return rgb.map(function (v) { return Math.max(0, Math.min(255, L + (v - L) * amt)); });
+    return rgb.map(function (v) { return clamp255(L + (v - L) * amt); });
   }
 
+  // ---------- OKLab (Björn Ottosson) for perceptual interpolation ----------
+  function sToLin(c) { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+  function linToS(c) { c = c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055; return clamp255(c * 255); }
+  function rgbToOklab(rgb) {
+    var r = sToLin(rgb[0]), g = sToLin(rgb[1]), b = sToLin(rgb[2]);
+    var l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+    var m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+    var s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+    return [
+      0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+      1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+      0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
+    ];
+  }
+  function oklabToRgb(lab) {
+    var L = lab[0], a = lab[1], bb = lab[2];
+    var l = L + 0.3963377774 * a + 0.2158037573 * bb;
+    var m = L - 0.1055613458 * a - 0.0638541728 * bb;
+    var s = L - 0.0894841775 * a - 1.2914855480 * bb;
+    l = l * l * l; m = m * m * m; s = s * s * s;
+    return [
+      linToS(+4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
+      linToS(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s),
+      linToS(-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s)
+    ];
+  }
+
+  // ---------- elements ----------
+  function $(id) { return document.getElementById(id); }
   var els = {
-    drop: document.getElementById("drop"),
-    file: document.getElementById("file"),
-    controls: document.getElementById("controls"),
-    result: document.getElementById("result"),
-    ncolors: document.getElementById("ncolors"),
-    nval: document.getElementById("nval"),
-    blend: document.getElementById("blend"),
-    bval: document.getElementById("bval"),
-    accent: document.getElementById("accent"),
-    aval: document.getElementById("aval"),
-    sat: document.getElementById("sat"),
-    sval: document.getElementById("sval"),
-    cOrig: document.getElementById("cOrig"),
-    cGraded: document.getElementById("cGraded"),
-    gradbar: document.getElementById("gradbar"),
-    swatches: document.getElementById("swatches"),
-    work: document.getElementById("work"),
-    dlCube: document.getElementById("dlCube"),
-    dlPng: document.getElementById("dlPng"),
-    copyHex: document.getElementById("copyHex")
+    drop: $("drop"), file: $("file"),
+    controls: $("controls"), result: $("result"),
+    ncolors: $("ncolors"), nval: $("nval"),
+    accent: $("accent"), aval: $("aval"),
+    sat: $("sat"), sval: $("sval"),
+    blend: $("blend"), bval: $("bval"),
+    oklab: $("oklab"),
+    cOrig: $("cOrig"), cGraded: $("cGraded"),
+    gradbar: $("gradbar"), stops: $("stops"), swatches: $("swatches"),
+    addStop: $("addStop"), picker: $("picker"),
+    dlCube: $("dlCube"), dlPng: $("dlPng"), copyHex: $("copyHex"), shareBtn: $("shareBtn"),
+    presetName: $("presetName"), savePreset: $("savePreset"), presets: $("presets"),
+    dropTarget: $("dropTarget"), fileTarget: $("fileTarget"),
+    targetFig: $("targetFig"), cTarget: $("cTarget"), dlTarget: $("dlTarget"),
+    work: $("work")
   };
 
-  var state = { img: null, stops: [], ramp: null, name: "gradient-map" };
+  // ---------- state ----------
+  var state = { img: null, target: null, stops: [], ramp: null, name: "grappa", manual: false };
+  var selIdx = null, drag = null;
 
-  // ---- remember slider settings + image across reloads ----
+  function blendAmt() { return parseInt(els.blend.value, 10) / 100; }
+
+  // ---------- settings + image persistence ----------
   function loadSettings() {
-    var n = localStorage.getItem("gm_ncolors");
-    var b = localStorage.getItem("gm_blend");
-    var ac = localStorage.getItem("gm_accent");
-    var sa = localStorage.getItem("gm_sat");
-    if (n !== null) { els.ncolors.value = n; els.nval.textContent = n; }
-    if (b !== null) { els.blend.value = b; els.bval.textContent = b; }
-    if (ac !== null) { els.accent.value = ac; els.aval.textContent = ac; }
-    if (sa !== null) { els.sat.value = sa; els.sval.textContent = sa; }
+    [["gm_ncolors", els.ncolors, els.nval], ["gm_accent", els.accent, els.aval],
+     ["gm_sat", els.sat, els.sval], ["gm_blend", els.blend, els.bval]].forEach(function (s) {
+      var v = localStorage.getItem(s[0]);
+      if (v !== null) { s[1].value = v; s[2].textContent = v; }
+    });
+    var k = localStorage.getItem("gm_oklab");
+    if (k !== null) els.oklab.checked = k === "1";
   }
 
-  // Store a downscaled copy of the image so it survives reloads (keeps localStorage small).
   function persistImage(im) {
     try {
       var max = 1280, scale = Math.min(1, max / Math.max(im.width, im.height));
@@ -56,73 +86,72 @@
       c.getContext("2d").drawImage(im, 0, 0, w, h);
       localStorage.setItem("gm_image", c.toDataURL("image/jpeg", 0.85));
       localStorage.setItem("gm_name", state.name);
-    } catch (e) {
-      // quota exceeded or tainted canvas — just skip persistence
-      try { localStorage.removeItem("gm_image"); } catch (e2) {}
-    }
+    } catch (e) { try { localStorage.removeItem("gm_image"); } catch (e2) {} }
   }
 
-  function restoreImage() {
+  function restoreImage(analyzeAfter) {
     var d = localStorage.getItem("gm_image");
-    if (!d) return;
-    state.name = localStorage.getItem("gm_name") || "gradient-map";
+    if (!d) return false;
+    state.name = localStorage.getItem("gm_name") || "grappa";
     var im = new Image();
-    im.onload = function () { state.img = im; recompute(); };
+    im.onload = function () {
+      state.img = im;
+      if (analyzeAfter) { recompute(); }
+      else { els.result.hidden = false; drawOriginal(); renderGraded(); }
+    };
     im.src = d;
+    return true;
   }
 
-  loadSettings();
-  restoreImage();
-
-  // ---- load image ----
+  // ---------- source image load ----------
   function loadFile(f) {
     if (!f || !/^image\//.test(f.type)) return;
-    state.name = (f.name || "gradient-map").replace(/\.[^.]+$/, "") || "gradient-map";
+    state.name = (f.name || "grappa").replace(/\.[^.]+$/, "") || "grappa";
     var url = URL.createObjectURL(f);
     var im = new Image();
     im.onload = function () { URL.revokeObjectURL(url); state.img = im; persistImage(im); recompute(); };
     im.src = url;
   }
-
-  els.drop.addEventListener("click", function () { els.file.click(); });
+  function wireDrop(el, input, cb) {
+    el.addEventListener("click", function () { input.click(); });
+    ["dragenter", "dragover"].forEach(function (ev) { el.addEventListener(ev, function (e) { e.preventDefault(); el.classList.add("over"); }); });
+    ["dragleave", "drop"].forEach(function (ev) { el.addEventListener(ev, function (e) { e.preventDefault(); el.classList.remove("over"); }); });
+    el.addEventListener("drop", function (e) { cb(e.dataTransfer.files[0]); });
+  }
+  wireDrop(els.drop, els.file, loadFile);
   els.file.addEventListener("change", function (e) { loadFile(e.target.files[0]); });
-  ["dragenter", "dragover"].forEach(function (ev) {
-    els.drop.addEventListener(ev, function (e) { e.preventDefault(); els.drop.classList.add("over"); });
-  });
-  ["dragleave", "drop"].forEach(function (ev) {
-    els.drop.addEventListener(ev, function (e) { e.preventDefault(); els.drop.classList.remove("over"); });
-  });
-  els.drop.addEventListener("drop", function (e) { loadFile(e.dataTransfer.files[0]); });
   window.addEventListener("paste", function (e) {
-    var items = e.clipboardData && e.clipboardData.items;
-    if (!items) return;
-    for (var i = 0; i < items.length; i++) {
-      if (items[i].type.indexOf("image") === 0) { loadFile(items[i].getAsFile()); break; }
-    }
+    var items = e.clipboardData && e.clipboardData.items; if (!items) return;
+    for (var i = 0; i < items.length; i++) { if (items[i].type.indexOf("image") === 0) { loadFile(items[i].getAsFile()); break; } }
   });
 
-  els.ncolors.addEventListener("input", function () {
-    els.nval.textContent = els.ncolors.value;
-    localStorage.setItem("gm_ncolors", els.ncolors.value);
-    recompute();
-  });
+  // ---------- target image load ----------
+  function loadTarget(f) {
+    if (!f || !/^image\//.test(f.type)) return;
+    var url = URL.createObjectURL(f);
+    var im = new Image();
+    im.onload = function () { URL.revokeObjectURL(url); state.target = im; renderTarget(); };
+    im.src = url;
+  }
+  wireDrop(els.dropTarget, els.fileTarget, loadTarget);
+  els.fileTarget.addEventListener("change", function (e) { loadTarget(e.target.files[0]); });
+
+  // ---------- slider / toggle listeners ----------
+  function bindExtract(el, label, key) {
+    el.addEventListener("input", function () { label.textContent = el.value; localStorage.setItem(key, el.value); recompute(); });
+  }
+  bindExtract(els.ncolors, els.nval, "gm_ncolors");
+  bindExtract(els.accent, els.aval, "gm_accent");
+  bindExtract(els.sat, els.sval, "gm_sat");
   els.blend.addEventListener("input", function () {
-    els.bval.textContent = els.blend.value;
-    localStorage.setItem("gm_blend", els.blend.value);
-    renderGraded();
+    els.bval.textContent = els.blend.value; localStorage.setItem("gm_blend", els.blend.value);
+    renderGraded(); renderTarget();
   });
-  els.accent.addEventListener("input", function () {
-    els.aval.textContent = els.accent.value;
-    localStorage.setItem("gm_accent", els.accent.value);
-    recompute();
-  });
-  els.sat.addEventListener("input", function () {
-    els.sval.textContent = els.sat.value;
-    localStorage.setItem("gm_sat", els.sat.value);
-    recompute();
+  els.oklab.addEventListener("change", function () {
+    localStorage.setItem("gm_oklab", els.oklab.checked ? "1" : "0"); rebuildAndRender();
   });
 
-  // ---- analysis: bin image by luminance, sample color per band ----
+  // ---------- analysis (luminance bins + accent sampling) ----------
   function analyze(N, accentMix) {
     var im = state.img;
     var maxDim = 500, scale = Math.min(1, maxDim / Math.max(im.width, im.height));
@@ -132,11 +161,7 @@
     wctx.drawImage(im, 0, 0, w, h);
     var data = wctx.getImageData(0, 0, w, h).data;
 
-    // fine 256-bin luminance histogram. For each brightness we keep two
-    // accumulators: a plain mean (stable tone) and a saturation-weighted mean
-    // (the dominant *colored* pixels at that brightness, since greys weigh ~0).
-    // The Color slider blends between them so vivid accents can beat the greys.
-    // Slot layout: [sumR, sumG, sumB, satR, satG, satB, satW, count].
+    // [sumR, sumG, sumB, satR, satG, satB, satW, count]
     var fine = new Array(256);
     for (var i = 0; i < 256; i++) fine[i] = [0, 0, 0, 0, 0, 0, 0, 0];
     for (var p = 0; p < data.length; p += 4) {
@@ -144,12 +169,11 @@
       var r = data[p], g = data[p + 1], b = data[p + 2];
       var L = Math.round(lum(r, g, b));
       var mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-      var sat = mx > 0 ? (mx - mn) / 255 : 0;     // chroma 0..1
+      var sat = mx > 0 ? (mx - mn) / 255 : 0;
       var f = fine[L];
       f[0] += r; f[1] += g; f[2] += b;
       f[3] += r * sat; f[4] += g * sat; f[5] += b * sat; f[6] += sat; f[7] += 1;
     }
-    // plain per-bin mean (used only for empty-bin fallback)
     var avg = fine.map(function (f) { return f[7] ? [f[0] / f[7], f[1] / f[7], f[2] / f[7]] : null; });
     function nearest(idx) {
       for (var d = 0; d < 256; d++) {
@@ -158,8 +182,7 @@
       }
       return [idx, idx, idx];
     }
-    // robust luminance range of the image (ignore ~0.5% outliers at each end)
-    // so the brightest/darkest stops land on tones the image actually contains
+    // robust luminance range (ignore ~0.5% outliers at each end)
     var total = 0;
     for (var t = 0; t < 256; t++) total += fine[t][7];
     var Lmin = 0, Lmax = 255;
@@ -170,14 +193,12 @@
       for (var hi = 255; hi >= 0; hi--) { cum += fine[hi][7]; if (cum >= cut) { Lmax = hi; break; } }
       if (Lmax <= Lmin) { Lmin = 0; Lmax = 255; }
     }
-    // N stops spread across that range, color = windowed average, mapped to 0..1
     var stops = [];
     var half = Math.max(1, Math.round((Lmax - Lmin) / (2 * (N - 1))));
     for (var s = 0; s < N; s++) {
-      var pos = s / (N - 1);                 // gradient position 0..1
+      var pos = s / (N - 1);
       var center = Math.round(Lmin + pos * (Lmax - Lmin));
-      var mR = 0, mG = 0, mB = 0, mN = 0;    // plain-mean accumulators
-      var aR = 0, aG = 0, aB = 0, aW = 0;    // saturation-weighted accumulators
+      var mR = 0, mG = 0, mB = 0, mN = 0, aR = 0, aG = 0, aB = 0, aW = 0;
       for (var k = center - half; k <= center + half; k++) {
         if (k >= 0 && k < 256 && fine[k][7]) {
           var fk = fine[k];
@@ -187,164 +208,273 @@
       }
       var meanCol = mN ? [mR / mN, mG / mN, mB / mN] : nearest(center);
       var accentCol = aW > 0.001 ? [aR / aW, aG / aW, aB / aW] : meanCol;
-      var col = [
+      stops.push({ pos: pos, col: [
         meanCol[0] + (accentCol[0] - meanCol[0]) * accentMix,
         meanCol[1] + (accentCol[1] - meanCol[1]) * accentMix,
         meanCol[2] + (accentCol[2] - meanCol[2]) * accentMix
-      ];
-      stops.push({ pos: pos, col: col });
+      ] });
     }
     return stops;
   }
 
-  // build a 256-entry smooth ramp from stops
-  function buildRamp(stops) {
+  // ---------- ramp (linear or OKLab interpolation) ----------
+  function buildRamp(stops, useOklab) {
+    var sorted = stops.slice().sort(function (a, b) { return a.pos - b.pos; });
+    var labs = useOklab ? sorted.map(function (s) { return rgbToOklab(s.col); }) : null;
     var ramp = new Array(256);
     for (var i = 0; i < 256; i++) {
-      var t = i / 255;
-      // find bracketing stops
-      var lo = stops[0], hi = stops[stops.length - 1];
-      for (var s = 0; s < stops.length - 1; s++) {
-        if (t >= stops[s].pos && t <= stops[s + 1].pos) { lo = stops[s]; hi = stops[s + 1]; break; }
+      var t = i / 255, loI = 0, hiI = sorted.length - 1, f = 0;
+      if (t <= sorted[0].pos) { loI = hiI = 0; }
+      else if (t >= sorted[sorted.length - 1].pos) { loI = hiI = sorted.length - 1; }
+      else {
+        for (var s = 0; s < sorted.length - 1; s++) {
+          if (t >= sorted[s].pos && t <= sorted[s + 1].pos) {
+            loI = s; hiI = s + 1;
+            var span = sorted[s + 1].pos - sorted[s].pos;
+            f = span > 0 ? (t - sorted[s].pos) / span : 0;
+            break;
+          }
+        }
       }
-      var span = hi.pos - lo.pos;
-      var f = span > 0 ? (t - lo.pos) / span : 0;
-      ramp[i] = [
-        lo.col[0] + (hi.col[0] - lo.col[0]) * f,
-        lo.col[1] + (hi.col[1] - lo.col[1]) * f,
-        lo.col[2] + (hi.col[2] - lo.col[2]) * f
-      ];
+      if (useOklab) {
+        var A = labs[loI], B = labs[hiI];
+        ramp[i] = oklabToRgb([A[0] + (B[0] - A[0]) * f, A[1] + (B[1] - A[1]) * f, A[2] + (B[2] - A[2]) * f]);
+      } else {
+        var a = sorted[loI].col, b = sorted[hiI].col;
+        ramp[i] = [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+      }
     }
     return ramp;
   }
 
+  // ---------- pipeline ----------
   function recompute() {
     if (!state.img) return;
-    els.controls.hidden = false;
-    els.result.hidden = false;
+    els.controls.hidden = false; els.result.hidden = false;
     state.stops = analyze(parseInt(els.ncolors.value, 10), parseInt(els.accent.value, 10) / 100);
     var satAmt = parseInt(els.sat.value, 10) / 100;
-    if (satAmt !== 1) {
-      state.stops = state.stops.map(function (s) { return { pos: s.pos, col: saturate(s.col, satAmt) }; });
-    }
-    state.ramp = buildRamp(state.stops);
-    drawOriginal();
-    drawGradbar();
-    drawSwatches();
-    renderGraded();
+    if (satAmt !== 1) state.stops = state.stops.map(function (s) { return { pos: s.pos, col: saturate(s.col, satAmt) }; });
+    state.manual = false; selIdx = null;
+    rebuildAndRender();
+  }
+  function rebuildAndRender() {
+    state.ramp = buildRamp(state.stops, els.oklab.checked);
+    drawGradbar(); drawStops(); drawSwatches(); drawOriginal(); renderGraded(); renderTarget();
   }
 
+  // ---------- rendering ----------
   function fitCanvas(canvas, iw, ih, maxW) {
     var scale = Math.min(1, maxW / iw);
-    canvas.width = Math.round(iw * scale);
-    canvas.height = Math.round(ih * scale);
-    return scale;
+    canvas.width = Math.round(iw * scale); canvas.height = Math.round(ih * scale);
   }
-
-  function drawOriginal() {
-    var im = state.img;
-    fitCanvas(els.cOrig, im.width, im.height, 900);
-    els.cOrig.getContext("2d").drawImage(im, 0, 0, els.cOrig.width, els.cOrig.height);
-  }
-
-  function renderGraded() {
-    if (!state.ramp) return;
-    var src = els.cOrig.getContext("2d").getImageData(0, 0, els.cOrig.width, els.cOrig.height);
-    els.cGraded.width = els.cOrig.width; els.cGraded.height = els.cOrig.height;
-    var out = els.cGraded.getContext("2d").createImageData(els.cGraded.width, els.cGraded.height);
-    var blend = parseInt(els.blend.value, 10) / 100;
-    var d = src.data, o = out.data;
+  function applyRamp(img, blend) {
+    var d = img.data;
     for (var p = 0; p < d.length; p += 4) {
-      var L = Math.round(lum(d[p], d[p + 1], d[p + 2]));
-      var c = state.ramp[L];
-      o[p]     = c[0] * blend + d[p]     * (1 - blend);
-      o[p + 1] = c[1] * blend + d[p + 1] * (1 - blend);
-      o[p + 2] = c[2] * blend + d[p + 2] * (1 - blend);
-      o[p + 3] = 255;
+      var c = state.ramp[Math.round(lum(d[p], d[p + 1], d[p + 2]))];
+      d[p] = c[0] * blend + d[p] * (1 - blend);
+      d[p + 1] = c[1] * blend + d[p + 1] * (1 - blend);
+      d[p + 2] = c[2] * blend + d[p + 2] * (1 - blend);
     }
-    els.cGraded.getContext("2d").putImageData(out, 0, 0);
   }
-
+  function drawOriginal() {
+    if (!state.img) return;
+    fitCanvas(els.cOrig, state.img.width, state.img.height, 900);
+    els.cOrig.getContext("2d").drawImage(state.img, 0, 0, els.cOrig.width, els.cOrig.height);
+  }
+  function renderGraded() {
+    if (!state.ramp || !state.img || !els.cOrig.width) return;
+    var src = els.cOrig.getContext("2d").getImageData(0, 0, els.cOrig.width, els.cOrig.height);
+    applyRamp(src, blendAmt());
+    els.cGraded.width = els.cOrig.width; els.cGraded.height = els.cOrig.height;
+    els.cGraded.getContext("2d").putImageData(src, 0, 0);
+  }
+  function renderTarget() {
+    if (!state.target || !state.ramp) return;
+    els.targetFig.hidden = false;
+    fitCanvas(els.cTarget, state.target.width, state.target.height, 900);
+    var ctx = els.cTarget.getContext("2d");
+    ctx.drawImage(state.target, 0, 0, els.cTarget.width, els.cTarget.height);
+    var img = ctx.getImageData(0, 0, els.cTarget.width, els.cTarget.height);
+    applyRamp(img, blendAmt());
+    ctx.putImageData(img, 0, 0);
+  }
   function drawGradbar() {
     var c = els.gradbar, ctx = c.getContext("2d");
     for (var x = 0; x < c.width; x++) {
-      var col = state.ramp[Math.floor(x / c.width * 256)];
-      ctx.fillStyle = "rgb(" + Math.round(col[0]) + "," + Math.round(col[1]) + "," + Math.round(col[2]) + ")";
+      ctx.fillStyle = rgbCss(state.ramp[Math.floor(x / c.width * 256)]);
       ctx.fillRect(x, 0, 1, c.height);
     }
   }
-
   function drawSwatches() {
     els.swatches.innerHTML = "";
-    state.stops.forEach(function (st) {
-      var c = st.col.map(Math.round);
-      var div = document.createElement("div");
+    state.stops.slice().sort(function (a, b) { return a.pos - b.pos; }).forEach(function (st) {
+      var c = st.col.map(Math.round), div = document.createElement("div");
       div.className = "sw";
-      div.innerHTML = '<div class="chip" style="background:rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')"></div><code>' + hex(c) + '</code>';
+      div.innerHTML = '<div class="chip" style="background:' + rgbCss(c) + '"></div><code>' + hex(c) + "</code>";
       els.swatches.appendChild(div);
     });
   }
 
-  // ---- exports ----
+  // ---------- editable stops ----------
+  function drawStops() {
+    els.stops.innerHTML = "";
+    state.stops.forEach(function (st, i) {
+      var h = document.createElement("div");
+      h.className = "stop" + (i === selIdx ? " sel" : "");
+      h.style.left = (st.pos * 100) + "%";
+      h.style.background = rgbCss(st.col);
+      h.addEventListener("pointerdown", function (e) {
+        e.stopPropagation(); e.preventDefault();
+        selIdx = i; markSel();
+        drag = { idx: i, moved: false };
+      });
+      h.addEventListener("dblclick", function (e) { e.preventDefault(); openPicker(i); });
+      els.stops.appendChild(h);
+    });
+  }
+  function markSel() {
+    var nodes = els.stops.children;
+    for (var k = 0; k < nodes.length; k++) nodes[k].classList.toggle("sel", k === selIdx);
+  }
+  // add a stop by clicking the empty track
+  els.stops.addEventListener("pointerdown", function (e) {
+    if (e.target !== els.stops || !state.ramp) return;
+    var rect = els.stops.getBoundingClientRect();
+    var pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    state.stops.push({ pos: pos, col: state.ramp[Math.round(pos * 255)].slice() });
+    state.manual = true; selIdx = state.stops.length - 1; rebuildAndRender();
+  });
+  document.addEventListener("pointermove", function (e) {
+    if (!drag) return;
+    var rect = els.stops.getBoundingClientRect();
+    var pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    state.stops[drag.idx].pos = pos; drag.moved = true;
+    if (els.stops.children[drag.idx]) els.stops.children[drag.idx].style.left = (pos * 100) + "%";
+    state.ramp = buildRamp(state.stops, els.oklab.checked);
+    drawGradbar();
+  });
+  document.addEventListener("pointerup", function () {
+    if (!drag) return;
+    var moved = drag.moved; drag = null;
+    if (moved) { state.manual = true; rebuildAndRender(); }
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Delete" && e.key !== "Backspace") return;
+    if (document.activeElement && /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    if (selIdx == null || state.stops.length <= 2) return;
+    state.stops.splice(selIdx, 1); selIdx = null; state.manual = true; rebuildAndRender();
+    e.preventDefault();
+  });
+  els.addStop.addEventListener("click", function () {
+    state.stops.push({ pos: 0.5, col: state.ramp ? state.ramp[128].slice() : [128, 128, 128] });
+    state.manual = true; selIdx = state.stops.length - 1; rebuildAndRender();
+  });
+  function openPicker(i) {
+    selIdx = i; markSel();
+    els.picker.value = hex(state.stops[i].col.map(Math.round));
+    els.picker.oninput = function () {
+      state.stops[i].col = hexToRgb(els.picker.value); state.manual = true;
+      state.ramp = buildRamp(state.stops, els.oklab.checked);
+      drawGradbar(); drawStops(); drawSwatches(); renderGraded(); renderTarget();
+    };
+    els.picker.click();
+  }
+
+  // ---------- exports ----------
   function download(filename, blob) {
     var a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
+    a.href = URL.createObjectURL(blob); a.download = filename;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
   }
-
   function buildCube(size) {
-    var blend = parseInt(els.blend.value, 10) / 100;
-    var lines = [
-      "# Generated by gradient-map tool",
-      'TITLE "' + state.name + '"',
-      "LUT_3D_SIZE " + size,
-      "DOMAIN_MIN 0.0 0.0 0.0",
-      "DOMAIN_MAX 1.0 1.0 1.0"
-    ];
+    var blend = blendAmt();
+    var lines = ["# Generated by Grappa", 'TITLE "' + state.name + '"', "LUT_3D_SIZE " + size, "DOMAIN_MIN 0.0 0.0 0.0", "DOMAIN_MAX 1.0 1.0 1.0"];
     var n = size - 1;
-    // .cube order: red varies fastest, then green, then blue
-    for (var b = 0; b < size; b++) {
-      for (var g = 0; g < size; g++) {
-        for (var r = 0; r < size; r++) {
-          var ri = r / n, gi = g / n, bi = b / n;
-          var L = Math.round(lum(ri * 255, gi * 255, bi * 255));
-          var c = state.ramp[L]; // 0..255
-          var or_ = (c[0] / 255) * blend + ri * (1 - blend);
-          var og = (c[1] / 255) * blend + gi * (1 - blend);
-          var ob = (c[2] / 255) * blend + bi * (1 - blend);
-          lines.push(or_.toFixed(6) + " " + og.toFixed(6) + " " + ob.toFixed(6));
-        }
-      }
+    for (var b = 0; b < size; b++) for (var g = 0; g < size; g++) for (var r = 0; r < size; r++) {
+      var ri = r / n, gi = g / n, bi = b / n;
+      var c = state.ramp[Math.round(lum(ri * 255, gi * 255, bi * 255))];
+      lines.push(
+        ((c[0] / 255) * blend + ri * (1 - blend)).toFixed(6) + " " +
+        ((c[1] / 255) * blend + gi * (1 - blend)).toFixed(6) + " " +
+        ((c[2] / 255) * blend + bi * (1 - blend)).toFixed(6));
     }
     return lines.join("\n") + "\n";
   }
-
-  els.dlCube.addEventListener("click", function () {
-    if (!state.ramp) return;
-    download(state.name + ".cube", new Blob([buildCube(33)], { type: "text/plain" }));
-  });
-
+  els.dlCube.addEventListener("click", function () { if (state.ramp) download(state.name + ".cube", new Blob([buildCube(33)], { type: "text/plain" })); });
   els.dlPng.addEventListener("click", function () {
     if (!state.ramp) return;
-    var c = document.createElement("canvas");
-    c.width = 1024; c.height = 128;
+    var c = document.createElement("canvas"); c.width = 1024; c.height = 128;
     var ctx = c.getContext("2d");
-    for (var x = 0; x < c.width; x++) {
-      var col = state.ramp[Math.floor(x / c.width * 256)];
-      ctx.fillStyle = "rgb(" + Math.round(col[0]) + "," + Math.round(col[1]) + "," + Math.round(col[2]) + ")";
-      ctx.fillRect(x, 0, 1, c.height);
-    }
+    for (var x = 0; x < c.width; x++) { ctx.fillStyle = rgbCss(state.ramp[Math.floor(x / c.width * 256)]); ctx.fillRect(x, 0, 1, c.height); }
     c.toBlob(function (blob) { download(state.name + "-gradient.png", blob); });
   });
-
   els.copyHex.addEventListener("click", function () {
     if (!state.stops.length) return;
-    var txt = state.stops.map(function (s) { return hex(s.col.map(Math.round)); }).join(", ");
-    navigator.clipboard.writeText(txt).then(function () {
-      els.copyHex.textContent = "Copied!";
-      setTimeout(function () { els.copyHex.textContent = "Copy hex list"; }, 1200);
-    });
+    var txt = state.stops.slice().sort(function (a, b) { return a.pos - b.pos; }).map(function (s) { return hex(s.col.map(Math.round)); }).join(", ");
+    navigator.clipboard.writeText(txt).then(function () { flash(els.copyHex, "Copied!", "Copy hex list"); });
   });
+  els.dlTarget.addEventListener("click", function () {
+    if (!state.target || !state.ramp) return;
+    var c = document.createElement("canvas"); c.width = state.target.width; c.height = state.target.height;
+    var ctx = c.getContext("2d"); ctx.drawImage(state.target, 0, 0);
+    var img = ctx.getImageData(0, 0, c.width, c.height); applyRamp(img, blendAmt()); ctx.putImageData(img, 0, 0);
+    c.toBlob(function (blob) { download(state.name + "-graded.png", blob); });
+  });
+  function flash(btn, on, off) { btn.textContent = on; setTimeout(function () { btn.textContent = off; }, 1200); }
+
+  // ---------- share + presets ----------
+  function b64e(s) { return btoa(unescape(encodeURIComponent(s))); }
+  function b64d(s) { return decodeURIComponent(escape(atob(s))); }
+  function serialize() {
+    return {
+      s: state.stops.map(function (st) { return [Math.round(st.pos * 1000), Math.round(st.col[0]), Math.round(st.col[1]), Math.round(st.col[2])]; }),
+      b: parseInt(els.blend.value, 10), k: els.oklab.checked ? 1 : 0, n: state.name
+    };
+  }
+  function applyGradient(obj) {
+    if (obj.s && obj.s.length) { state.stops = obj.s.map(function (a) { return { pos: a[0] / 1000, col: [a[1], a[2], a[3]] }; }); state.manual = true; }
+    if (obj.b != null) { els.blend.value = obj.b; els.bval.textContent = obj.b; }
+    if (obj.k != null) els.oklab.checked = !!obj.k;
+    if (obj.n) state.name = obj.n;
+    els.controls.hidden = false; els.result.hidden = false; selIdx = null;
+    rebuildAndRender();
+  }
+  els.shareBtn.addEventListener("click", function () {
+    if (!state.stops.length) return;
+    var url = location.origin + location.pathname + "#g=" + encodeURIComponent(b64e(JSON.stringify(serialize())));
+    navigator.clipboard.writeText(url).then(function () { flash(els.shareBtn, "Link copied!", "Copy share link"); });
+  });
+  function loadFromHash() {
+    var m = location.hash.match(/g=([^&]+)/); if (!m) return false;
+    try {
+      var obj = JSON.parse(b64d(decodeURIComponent(m[1])));
+      restoreImage(false); // load source image for preview only, no re-analyze
+      applyGradient(obj);
+      return true;
+    } catch (e) { return false; }
+  }
+  function getPresets() { try { return JSON.parse(localStorage.getItem("gm_presets") || "{}"); } catch (e) { return {}; } }
+  function setPresets(p) { localStorage.setItem("gm_presets", JSON.stringify(p)); }
+  function drawPresets() {
+    var p = getPresets(); els.presets.innerHTML = "";
+    Object.keys(p).forEach(function (name) {
+      var wrap = document.createElement("span"); wrap.className = "preset";
+      var load = document.createElement("button"); load.textContent = name;
+      load.addEventListener("click", function () { applyGradient(p[name]); });
+      var del = document.createElement("button"); del.textContent = "×"; del.title = "delete";
+      del.addEventListener("click", function () { var q = getPresets(); delete q[name]; setPresets(q); drawPresets(); });
+      wrap.appendChild(load); wrap.appendChild(del); els.presets.appendChild(wrap);
+    });
+  }
+  els.savePreset.addEventListener("click", function () {
+    if (!state.stops.length) return;
+    var name = (els.presetName.value || "untitled").trim();
+    var p = getPresets(); p[name] = serialize(); setPresets(p); els.presetName.value = ""; drawPresets();
+  });
+
+  // ---------- init ----------
+  loadSettings();
+  drawPresets();
+  if (!loadFromHash()) restoreImage(true);
 })();

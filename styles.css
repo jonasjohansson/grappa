@@ -1,17 +1,49 @@
 :root {
-  --pad: 16px;
-  --gap: 16px;
+  /* spacing scale */
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 16px;
+  --space-5: 24px;
+
+  /* layout */
+  --pad: var(--space-4);
+  --gap: var(--space-4);
+  --label-w: 140px;
+  --range-basis: 200px;
+  --col-basis: 300px;
+  --slider-max: 480px;
+  --min-vh: 100vh;
+
+  /* borders & radius */
+  --border-w: 1px;
   --border-color: #999;
+  --radius-pill: 50%;
+
+  /* colors */
   --hover-bg: #eee;
+  --accent: #06f;
+  --muted: #555;
+  --white: #fff;
+  --dark: #333;
+  --shadow: rgba(0, 0, 0, .4);
+
+  /* type */
   --font: sans-serif;
   --font-small: 12px;
   --font-tiny: 11px;
   --line-height: 1.4;
-  --drop-pad: 24px;
+
+  /* component sizes */
+  --drop-pad: var(--space-5);
+  --drop-pad-sm: var(--space-4);
   --chip-w: 50px;
   --chip-h: 30px;
   --gradbar-h: 40px;
-  --slider-max: 480px;
+  --stops-h: 22px;
+  --stop-size: 16px;
+  --stop-border-w: 2px;
+  --stop-top: 2px;
 }
 
 * { box-sizing: border-box; }
@@ -22,29 +54,51 @@ body {
   padding: var(--pad);
   line-height: var(--line-height);
   width: 100%;
-  min-height: 100vh;
+  min-height: var(--min-vh);
 }
 
-#drop {
-  border: 1px dashed var(--border-color);
+#drop, #dropTarget {
+  border: var(--border-w) dashed var(--border-color);
   padding: var(--drop-pad);
   text-align: center;
   cursor: pointer;
 }
-#drop.over { background: var(--hover-bg); }
+#dropTarget { padding: var(--drop-pad-sm); margin-top: var(--gap); }
+#drop.over, #dropTarget.over { background: var(--hover-bg); }
 
-.row { margin: 8px 0; }
-.row input[type=range] { display: block; width: 100%; max-width: var(--slider-max); margin-top: 4px; }
+.row { margin: var(--space-3) 0; display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.row input[type=range] { display: block; flex: 1 1 var(--range-basis); width: 100%; max-width: var(--slider-max); }
+.row > label:first-child { min-width: var(--label-w); }
+.hint { font-size: var(--font-small); color: var(--muted); }
 
 canvas { max-width: 100%; display: block; }
 
 .previews { display: flex; gap: var(--gap); flex-wrap: wrap; }
-.previews figure { margin: 0; flex: 1 1 300px; min-width: 0; }
-.previews figcaption { font-size: var(--font-small); }
-.previews canvas { width: 100%; height: auto; }
+.previews figure, #targetFig { margin: 0; flex: 1 1 var(--col-basis); min-width: 0; }
+.previews figcaption, #targetFig figcaption { font-size: var(--font-small); }
+.previews canvas, #cTarget { width: 100%; height: auto; }
 
-#gradbar { width: 100%; height: var(--gradbar-h); margin-top: var(--gap); }
+#gradbar { width: 100%; height: var(--gradbar-h); margin-top: var(--gap); border: var(--border-w) solid var(--border-color); }
 
-.swatches { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+/* editable stops track */
+#stops { position: relative; width: 100%; height: var(--stops-h); margin-top: var(--space-1); }
+.stop {
+  position: absolute; top: var(--stop-top);
+  width: var(--stop-size); height: var(--stop-size);
+  transform: translateX(-50%);
+  border: var(--stop-border-w) solid var(--white); border-radius: var(--radius-pill);
+  box-shadow: 0 0 0 var(--border-w) var(--dark), 0 1px 3px var(--shadow);
+  cursor: grab; touch-action: none;
+}
+.stop.sel { box-shadow: 0 0 0 var(--stop-border-w) var(--accent), 0 1px 3px var(--shadow); }
+
+.swatches { display: flex; flex-wrap: wrap; gap: var(--space-1); margin: var(--space-3) 0; }
 .sw { font-size: var(--font-tiny); text-align: center; }
-.sw .chip { width: var(--chip-w); height: var(--chip-h); border: 1px solid var(--border-color); }
+.sw .chip { width: var(--chip-w); height: var(--chip-h); border: var(--border-w) solid var(--border-color); }
+
+#presets { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-1) 0 var(--space-3); }
+.preset { display: inline-flex; align-items: center; border: var(--border-w) solid var(--border-color); }
+.preset button { border: 0; background: none; cursor: pointer; font-size: var(--font-tiny); padding: var(--space-1) var(--space-2); }
+.preset button:last-child { border-left: var(--border-w) solid var(--border-color); color: var(--muted); }
+
+.picker { position: fixed; left: -9999px; width: 0; height: 0; opacity: 0; }

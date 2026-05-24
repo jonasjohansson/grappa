@@ -27,6 +27,9 @@
       <label>Strength: <span id="bval">100</span>%</label>
       <input type="range" id="blend" min="0" max="100" value="100">
     </div>
+    <div class="row">
+      <label><input type="checkbox" id="oklab" checked> OKLab blending (smoother mid-tones)</label>
+    </div>
   </div>
 
   <div id="result" hidden>
@@ -42,15 +45,36 @@
     </div>
 
     <canvas id="gradbar" width="512" height="40"></canvas>
+    <div id="stops"></div>
+    <div class="row">
+      <button id="addStop">+ stop</button>
+      <span class="hint">drag to move · double-click to recolor · click + Delete to remove</span>
+    </div>
     <div class="swatches" id="swatches"></div>
 
     <div class="row">
       <button id="dlCube">Download .cube LUT</button>
       <button id="dlPng">Download gradient PNG</button>
       <button id="copyHex">Copy hex list</button>
+      <button id="shareBtn">Copy share link</button>
     </div>
+
+    <div class="row">
+      <input id="presetName" placeholder="preset name">
+      <button id="savePreset">Save preset</button>
+    </div>
+    <div id="presets"></div>
+
+    <div id="dropTarget">Drop a target frame to preview the grade on real footage (optional)</div>
+    <input type="file" id="fileTarget" accept="image/*" hidden>
+    <figure id="targetFig" hidden>
+      <figcaption>Target graded</figcaption>
+      <canvas id="cTarget"></canvas>
+      <div class="row"><button id="dlTarget">Download graded image</button></div>
+    </figure>
   </div>
 
+<input type="color" id="picker" class="picker">
 <canvas id="work" hidden></canvas>
 <script src="app.js"></script>
 </body>
