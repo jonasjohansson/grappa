@@ -49,19 +49,20 @@
     accent: $("accent"), aval: $("aval"),
     sat: $("sat"), sval: $("sval"),
     blend: $("blend"), bval: $("bval"),
-    oklab: $("oklab"),
+    oklab: $("oklab"), mirror: $("mirror"),
+    combine: $("combine"), combineRow: $("combineRow"),
+    thumbs: $("thumbs"),
     cOrig: $("cOrig"), cGraded: $("cGraded"),
     gradbar: $("gradbar"), stops: $("stops"), swatches: $("swatches"),
     addStop: $("addStop"), eyedrop: $("eyedrop"), reExtract: $("reExtract"), picker: $("picker"),
     lutSize: $("lutSize"),
     dlCube: $("dlCube"), dlPng: $("dlPng"), copyHex: $("copyHex"), shareBtn: $("shareBtn"),
-    dropTarget: $("dropTarget"), fileTarget: $("fileTarget"),
-    targetFig: $("targetFig"), cTarget: $("cTarget"), dlTarget: $("dlTarget"),
     work: $("work")
   };
 
   // ---------- state ----------
-  var state = { img: null, target: null, stops: [], ramp: null, name: "grappa", manual: false };
+  var state = { imgs: [], activeIdx: 0, stops: [], ramp: null, name: "grappa", manual: false };
+  function activeImg() { return state.imgs[state.activeIdx] || null; }
   var selIdx = null, drag = null;
 
   function blendAmt() { return parseInt(els.blend.value, 10) / 100; }
@@ -75,68 +76,100 @@
     });
     var k = localStorage.getItem("gm_oklab");
     if (k !== null) els.oklab.checked = k === "1";
+    var mr = localStorage.getItem("gm_mirror");
+    if (mr !== null) els.mirror.checked = mr === "1";
+    var cm = localStorage.getItem("gm_combine");
+    if (cm !== null) els.combine.value = cm;
     var ls = localStorage.getItem("gm_lutsize");
     if (ls !== null) els.lutSize.value = ls;
   }
 
-  function persistImage(im) {
+  function imgToDataURL(im) {
+    var max = 1280, scale = Math.min(1, max / Math.max(im.width, im.height));
+    var w = Math.round(im.width * scale), h = Math.round(im.height * scale);
+    var c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    c.getContext("2d").drawImage(im, 0, 0, w, h);
+    return c.toDataURL("image/jpeg", 0.85);
+  }
+  function persistImages() {
     try {
-      var max = 1280, scale = Math.min(1, max / Math.max(im.width, im.height));
-      var w = Math.round(im.width * scale), h = Math.round(im.height * scale);
-      var c = document.createElement("canvas");
-      c.width = w; c.height = h;
-      c.getContext("2d").drawImage(im, 0, 0, w, h);
-      localStorage.setItem("gm_image", c.toDataURL("image/jpeg", 0.85));
+      localStorage.setItem("gm_images", JSON.stringify(state.imgs.map(imgToDataURL)));
       localStorage.setItem("gm_name", state.name);
-    } catch (e) { try { localStorage.removeItem("gm_image"); } catch (e2) {} }
+      localStorage.removeItem("gm_image"); // retire old single-image key
+    } catch (e) { try { localStorage.removeItem("gm_images"); } catch (e2) {} }
   }
 
-  function restoreImage(analyzeAfter) {
-    var d = localStorage.getItem("gm_image");
-    if (!d) return false;
+  // decode a list of data-URLs / object-URLs into Image objects, calling cb once
+  // all have settled (preserving order, skipping any that failed to load)
+  function loadImages(srcs, cb) {
+    var loaded = [], remaining = srcs.length;
+    if (!remaining) { cb([]); return; }
+    srcs.forEach(function (d, i) {
+      var im = new Image();
+      im.onload = function () { loaded[i] = im; if (--remaining === 0) cb(loaded.filter(Boolean)); };
+      im.onerror = function () { if (--remaining === 0) cb(loaded.filter(Boolean)); };
+      im.src = d;
+    });
+  }
+
+  function restoreImages(analyzeAfter) {
+    var arr = null, raw = localStorage.getItem("gm_images");
+    if (raw) { try { arr = JSON.parse(raw); } catch (e) {} }
+    if (!arr) { var single = localStorage.getItem("gm_image"); if (single) arr = [single]; }
+    if (!arr || !arr.length) return false;
     state.name = localStorage.getItem("gm_name") || "grappa";
-    var im = new Image();
-    im.onload = function () {
-      state.img = im;
+    loadImages(arr, function (imgs) {
+      if (!imgs.length) return;
+      state.imgs = imgs; state.activeIdx = 0;
       if (analyzeAfter) { recompute(); }
-      else { els.result.hidden = false; drawOriginal(); renderGraded(); }
-    };
-    im.src = d;
+      else { els.result.hidden = false; renderThumbs(); drawOriginal(); renderGraded(); }
+    });
     return true;
   }
 
   // ---------- source image load ----------
-  function loadFile(f) {
-    if (!f || !/^image\//.test(f.type)) return;
-    state.name = (f.name || "grappa").replace(/\.[^.]+$/, "") || "grappa";
-    var url = URL.createObjectURL(f);
-    var im = new Image();
-    im.onload = function () { URL.revokeObjectURL(url); state.img = im; persistImage(im); recompute(); };
-    im.src = url;
+  // append one or more dropped/chosen files to the source set, then re-extract;
+  // the gradient is rebuilt from every image, so you can build it up one at a time
+  function loadFiles(files) {
+    var imgFiles = Array.prototype.filter.call(files || [], function (f) { return f && /^image\//.test(f.type); });
+    if (!imgFiles.length) return;
+    var urls = imgFiles.map(function (f) { return URL.createObjectURL(f); });
+    loadImages(urls, function (imgs) {
+      urls.forEach(URL.revokeObjectURL);
+      if (!imgs.length) return;
+      if (!state.imgs.length) state.name = (imgFiles[0].name || "grappa").replace(/\.[^.]+$/, "") || "grappa";
+      state.imgs = state.imgs.concat(imgs);
+      state.activeIdx = state.imgs.length - 1; // preview the most recently added
+      persistImages(); recompute();
+    });
+  }
+  // drop an image from the set and re-extract (or reset to empty if it was the last)
+  function removeImage(i) {
+    state.imgs.splice(i, 1);
+    if (state.activeIdx > i) state.activeIdx--;
+    state.activeIdx = Math.max(0, Math.min(state.activeIdx, state.imgs.length - 1));
+    persistImages();
+    if (!state.imgs.length) {
+      state.stops = []; state.ramp = null;
+      els.controls.hidden = true; els.result.hidden = true;
+      renderThumbs();
+      return;
+    }
+    recompute();
   }
   function wireDrop(el, input, cb) {
     el.addEventListener("click", function () { input.click(); });
     ["dragenter", "dragover"].forEach(function (ev) { el.addEventListener(ev, function (e) { e.preventDefault(); el.classList.add("over"); }); });
     ["dragleave", "drop"].forEach(function (ev) { el.addEventListener(ev, function (e) { e.preventDefault(); el.classList.remove("over"); }); });
-    el.addEventListener("drop", function (e) { cb(e.dataTransfer.files[0]); });
+    el.addEventListener("drop", function (e) { cb(e.dataTransfer.files); });
   }
-  wireDrop(els.drop, els.file, loadFile);
-  els.file.addEventListener("change", function (e) { loadFile(e.target.files[0]); });
+  wireDrop(els.drop, els.file, loadFiles);
+  els.file.addEventListener("change", function (e) { loadFiles(e.target.files); });
   window.addEventListener("paste", function (e) {
     var items = e.clipboardData && e.clipboardData.items; if (!items) return;
-    for (var i = 0; i < items.length; i++) { if (items[i].type.indexOf("image") === 0) { loadFile(items[i].getAsFile()); break; } }
+    for (var i = 0; i < items.length; i++) { if (items[i].type.indexOf("image") === 0) { loadFiles([items[i].getAsFile()]); break; } }
   });
-
-  // ---------- target image load ----------
-  function loadTarget(f) {
-    if (!f || !/^image\//.test(f.type)) return;
-    var url = URL.createObjectURL(f);
-    var im = new Image();
-    im.onload = function () { URL.revokeObjectURL(url); state.target = im; renderTarget(); };
-    im.src = url;
-  }
-  wireDrop(els.dropTarget, els.fileTarget, loadTarget);
-  els.fileTarget.addEventListener("change", function (e) { loadTarget(e.target.files[0]); });
 
   // ---------- slider / toggle listeners ----------
   function bindExtract(el, label, key) {
@@ -147,10 +180,16 @@
   bindExtract(els.sat, els.sval, "gm_sat");
   els.blend.addEventListener("input", function () {
     els.bval.textContent = els.blend.value; localStorage.setItem("gm_blend", els.blend.value);
-    renderGraded(); renderTarget();
+    renderGraded();
   });
   els.oklab.addEventListener("change", function () {
     localStorage.setItem("gm_oklab", els.oklab.checked ? "1" : "0"); rebuildAndRender();
+  });
+  els.mirror.addEventListener("change", function () {
+    localStorage.setItem("gm_mirror", els.mirror.checked ? "1" : "0"); rebuildAndRender();
+  });
+  els.combine.addEventListener("change", function () {
+    localStorage.setItem("gm_combine", els.combine.value); recompute();
   });
   els.lutSize.addEventListener("change", function () { localStorage.setItem("gm_lutsize", els.lutSize.value); });
   els.reExtract.addEventListener("click", function () { recompute(); });
@@ -165,8 +204,7 @@
   // the single most-saturated hue cluster define the accent. A vivid minority
   // hue beats a majority of greys (greys carry ~no weight) but still yields to a
   // larger, equally-vivid cluster — the best a one-color-per-brightness LUT can do.
-  function analyze(N, accentMix) {
-    var im = state.img;
+  function analyzeImage(im, N, accentMix) {
     var maxDim = 500, scale = Math.min(1, maxDim / Math.max(im.width, im.height));
     var w = Math.max(1, Math.round(im.width * scale)), h = Math.max(1, Math.round(im.height * scale));
     els.work.width = w; els.work.height = h;
@@ -253,6 +291,31 @@
     return stops;
   }
 
+  // Combine all source images into one set of stops, two ways:
+  //   sequence — concatenate each image's full gradient end-to-end, evenly spaced
+  //              across the ramp (image 1's palette, then image 2's, ...). Hues stay
+  //              intact because images never average into each other.
+  //   blend    — mean the stop colors per brightness band (equal weight per image).
+  //              Good for frames sharing a palette; muddies images of differing casts.
+  function analyze(N, accentMix) {
+    var per = state.imgs.map(function (im) { return analyzeImage(im, N, accentMix); });
+    if (per.length <= 1) return per[0] || [];
+    if (els.combine.value === "sequence") {
+      var cols = [];
+      per.forEach(function (stops) { stops.forEach(function (st) { cols.push(st.col); }); });
+      return cols.map(function (col, m) {
+        return { pos: cols.length > 1 ? m / (cols.length - 1) : 0, col: col };
+      });
+    }
+    var out = [];
+    for (var s = 0; s < N; s++) {
+      var r = 0, g = 0, b = 0;
+      per.forEach(function (st) { r += st[s].col[0]; g += st[s].col[1]; b += st[s].col[2]; });
+      out.push({ pos: per[0][s].pos, col: [r / per.length, g / per.length, b / per.length] });
+    }
+    return out;
+  }
+
   // ---------- ramp (linear or OKLab interpolation) ----------
   function buildRamp(stops, useOklab) {
     var sorted = stops.slice().sort(function (a, b) { return a.pos - b.pos; });
@@ -285,7 +348,7 @@
 
   // ---------- pipeline ----------
   function recompute() {
-    if (!state.img) return;
+    if (!state.imgs.length) return;
     els.controls.hidden = false; els.result.hidden = false;
     state.stops = analyze(parseInt(els.ncolors.value, 10), parseInt(els.accent.value, 10) / 100);
     var satAmt = parseInt(els.sat.value, 10) / 100;
@@ -293,9 +356,23 @@
     state.manual = false; selIdx = null;
     rebuildAndRender();
   }
+  // Fold a ramp so it reflects at the midpoint: index 0..255 maps to 0..255..0,
+  // so shadows and highlights share the first stop's color and mids peak at the
+  // last. Applied to the finished ramp, so every consumer (preview, bar, .cube)
+  // sees the mirrored result.
+  function applyMirror(ramp) {
+    var out = new Array(256);
+    for (var i = 0; i < 256; i++) out[i] = ramp[255 - Math.abs(2 * i - 255)];
+    return out;
+  }
+  function buildRampNow() {
+    var r = buildRamp(state.stops, els.oklab.checked);
+    return els.mirror.checked ? applyMirror(r) : r;
+  }
   function rebuildAndRender() {
-    state.ramp = buildRamp(state.stops, els.oklab.checked);
-    drawGradbar(); drawStops(); drawSwatches(); drawOriginal(); renderGraded(); renderTarget();
+    state.ramp = buildRampNow();
+    renderThumbs();
+    drawGradbar(); drawStops(); drawSwatches(); drawOriginal(); renderGraded();
   }
 
   // ---------- rendering ----------
@@ -313,26 +390,16 @@
     }
   }
   function drawOriginal() {
-    if (!state.img) return;
-    fitCanvas(els.cOrig, state.img.width, state.img.height, 900);
-    els.cOrig.getContext("2d").drawImage(state.img, 0, 0, els.cOrig.width, els.cOrig.height);
+    var im = activeImg(); if (!im) return;
+    fitCanvas(els.cOrig, im.width, im.height, 900);
+    els.cOrig.getContext("2d").drawImage(im, 0, 0, els.cOrig.width, els.cOrig.height);
   }
   function renderGraded() {
-    if (!state.ramp || !state.img || !els.cOrig.width) return;
+    if (!state.ramp || !activeImg() || !els.cOrig.width) return;
     var src = els.cOrig.getContext("2d").getImageData(0, 0, els.cOrig.width, els.cOrig.height);
     applyRamp(src, blendAmt());
     els.cGraded.width = els.cOrig.width; els.cGraded.height = els.cOrig.height;
     els.cGraded.getContext("2d").putImageData(src, 0, 0);
-  }
-  function renderTarget() {
-    if (!state.target || !state.ramp) return;
-    els.targetFig.hidden = false;
-    fitCanvas(els.cTarget, state.target.width, state.target.height, 900);
-    var ctx = els.cTarget.getContext("2d");
-    ctx.drawImage(state.target, 0, 0, els.cTarget.width, els.cTarget.height);
-    var img = ctx.getImageData(0, 0, els.cTarget.width, els.cTarget.height);
-    applyRamp(img, blendAmt());
-    ctx.putImageData(img, 0, 0);
   }
   function drawGradbar() {
     var c = els.gradbar, ctx = c.getContext("2d");
@@ -348,6 +415,33 @@
       div.className = "sw";
       div.innerHTML = '<div class="chip" style="background:' + rgbCss(c) + '"></div><code>' + hex(c) + "</code>";
       els.swatches.appendChild(div);
+    });
+  }
+
+  // thumbnail strip of every source image: click to preview one, × to remove it
+  function renderThumbs() {
+    els.combineRow.hidden = state.imgs.length < 2; // combine mode only matters with 2+
+    els.thumbs.innerHTML = "";
+    if (!state.imgs.length) { els.thumbs.hidden = true; return; }
+    els.thumbs.hidden = false;
+    state.imgs.forEach(function (im, i) {
+      var size = 64, scale = Math.min(size / im.width, size / im.height);
+      var wrap = document.createElement("div");
+      wrap.className = "thumb-wrap";
+      var cv = document.createElement("canvas");
+      cv.width = Math.max(1, Math.round(im.width * scale));
+      cv.height = Math.max(1, Math.round(im.height * scale));
+      cv.className = "thumb" + (i === state.activeIdx ? " active" : "");
+      cv.title = "Preview this image";
+      cv.getContext("2d").drawImage(im, 0, 0, cv.width, cv.height);
+      cv.addEventListener("click", function () {
+        state.activeIdx = i; renderThumbs(); drawOriginal(); renderGraded();
+      });
+      var x = document.createElement("button");
+      x.className = "thumb-x"; x.type = "button"; x.title = "Remove from set"; x.textContent = "×";
+      x.addEventListener("click", function (e) { e.stopPropagation(); removeImage(i); });
+      wrap.appendChild(cv); wrap.appendChild(x);
+      els.thumbs.appendChild(wrap);
     });
   }
 
@@ -386,7 +480,7 @@
     var pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     state.stops[drag.idx].pos = pos; drag.moved = true;
     if (els.stops.children[drag.idx]) els.stops.children[drag.idx].style.left = (pos * 100) + "%";
-    state.ramp = buildRamp(state.stops, els.oklab.checked);
+    state.ramp = buildRampNow();
     drawGradbar();
   });
   document.addEventListener("pointerup", function () {
@@ -426,7 +520,7 @@
     els.cOrig.classList.toggle("eyedrop", on);
   }
   els.eyedrop.addEventListener("click", function () {
-    if (!state.img) return;
+    if (!activeImg()) return;
     if (window.EyeDropper) {
       new EyeDropper().open()
         .then(function (res) { addColorStop(hexToRgb(res.sRGBHex)); })
@@ -449,8 +543,8 @@
     els.picker.value = hex(state.stops[i].col.map(Math.round));
     els.picker.oninput = function () {
       state.stops[i].col = hexToRgb(els.picker.value); state.manual = true;
-      state.ramp = buildRamp(state.stops, els.oklab.checked);
-      drawGradbar(); drawStops(); drawSwatches(); renderGraded(); renderTarget();
+      state.ramp = buildRampNow();
+      drawGradbar(); drawStops(); drawSwatches(); renderGraded();
     };
     els.picker.click();
   }
@@ -489,13 +583,6 @@
     var txt = state.stops.slice().sort(function (a, b) { return a.pos - b.pos; }).map(function (s) { return hex(s.col.map(Math.round)); }).join(", ");
     navigator.clipboard.writeText(txt).then(function () { flash(els.copyHex, "Copied!", "Copy hex list"); });
   });
-  els.dlTarget.addEventListener("click", function () {
-    if (!state.target || !state.ramp) return;
-    var c = document.createElement("canvas"); c.width = state.target.width; c.height = state.target.height;
-    var ctx = c.getContext("2d"); ctx.drawImage(state.target, 0, 0);
-    var img = ctx.getImageData(0, 0, c.width, c.height); applyRamp(img, blendAmt()); ctx.putImageData(img, 0, 0);
-    c.toBlob(function (blob) { download(state.name + "-graded.png", blob); });
-  });
   function flash(btn, on, off) { btn.textContent = on; setTimeout(function () { btn.textContent = off; }, 1200); }
 
   // ---------- share link ----------
@@ -504,13 +591,14 @@
   function serialize() {
     return {
       s: state.stops.map(function (st) { return [Math.round(st.pos * 1000), Math.round(st.col[0]), Math.round(st.col[1]), Math.round(st.col[2])]; }),
-      b: parseInt(els.blend.value, 10), k: els.oklab.checked ? 1 : 0, n: state.name
+      b: parseInt(els.blend.value, 10), k: els.oklab.checked ? 1 : 0, m: els.mirror.checked ? 1 : 0, n: state.name
     };
   }
   function applyGradient(obj) {
     if (obj.s && obj.s.length) { state.stops = obj.s.map(function (a) { return { pos: a[0] / 1000, col: [a[1], a[2], a[3]] }; }); state.manual = true; }
     if (obj.b != null) { els.blend.value = obj.b; els.bval.textContent = obj.b; }
     if (obj.k != null) els.oklab.checked = !!obj.k;
+    if (obj.m != null) els.mirror.checked = !!obj.m;
     if (obj.n) state.name = obj.n;
     els.controls.hidden = false; els.result.hidden = false; selIdx = null;
     rebuildAndRender();
@@ -524,12 +612,12 @@
     var m = location.hash.match(/g=([^&]+)/); if (!m) return false;
     try {
       var obj = JSON.parse(b64d(decodeURIComponent(m[1])));
-      restoreImage(false); // load source image for preview only, no re-analyze
+      restoreImages(false); // load source images for preview only, no re-analyze
       applyGradient(obj);
       return true;
     } catch (e) { return false; }
   }
   // ---------- init ----------
   loadSettings();
-  if (!loadFromHash()) restoreImage(true);
+  if (!loadFromHash()) restoreImages(true);
 })();

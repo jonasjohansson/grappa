@@ -11,8 +11,8 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div id="drop">Drop an image here, click to choose, or paste from clipboard</div>
-  <input type="file" id="file" accept="image/*" hidden>
+  <div id="drop">Drop, choose, or paste image(s) to add &mdash; build one gradient from the whole set</div>
+  <input type="file" id="file" accept="image/*" multiple hidden>
 
   <div id="controls" hidden>
     <div class="row">
@@ -34,9 +34,22 @@
     <div class="row">
       <label><input type="checkbox" id="oklab" checked> OKLab blending (smoother mid-tones)</label>
     </div>
+    <div class="row">
+      <label><input type="checkbox" id="mirror"> Mirror (reflect ramp at midpoint)</label>
+    </div>
+    <div class="row" id="combineRow" hidden>
+      <label>Combine maps
+        <select id="combine">
+          <option value="sequence">Sequence (one map after another)</option>
+          <option value="blend">Blend (average tones)</option>
+        </select>
+      </label>
+      <span class="hint">Sequence runs each image's full gradient end-to-end · Blend averages them per brightness</span>
+    </div>
   </div>
 
   <div id="result" hidden>
+    <div id="thumbs" class="thumbs" hidden></div>
     <div class="previews">
       <figure>
         <figcaption>Original</figcaption>
@@ -71,14 +84,6 @@
       <button id="copyHex">Copy hex list</button>
       <button id="shareBtn">Copy share link</button>
     </div>
-
-    <div id="dropTarget">Drop a target frame to preview the grade on real footage (optional)</div>
-    <input type="file" id="fileTarget" accept="image/*" hidden>
-    <figure id="targetFig" hidden>
-      <figcaption>Target graded</figcaption>
-      <canvas id="cTarget"></canvas>
-      <div class="row"><button id="dlTarget">Download graded image</button></div>
-    </figure>
   </div>
 
 <input type="color" id="picker" class="picker">

@@ -56,14 +56,13 @@ body {
   min-height: var(--min-vh);
 }
 
-#drop, #dropTarget {
+#drop {
   border: var(--border-w) dashed var(--border-color);
   padding: var(--drop-pad);
   text-align: center;
   cursor: pointer;
 }
-#dropTarget { padding: var(--drop-pad-sm); margin-top: var(--gap); }
-#drop.over, #dropTarget.over { background: var(--hover-bg); }
+#drop.over { background: var(--hover-bg); }
 
 .row { margin: var(--space-3) 0; display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
 .row input[type=range] { display: block; flex: 1 1 var(--range-basis); width: 100%; max-width: var(--slider-max); }
@@ -71,11 +70,26 @@ body {
 .hint { font-size: var(--font-small); color: var(--muted); }
 
 canvas { max-width: 100%; display: block; }
+canvas[hidden] { display: none; } /* author canvas{display:block} otherwise overrides the hidden attr */
+
+/* source-image thumbnail strip — build the gradient up image by image */
+.thumbs { display: flex; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--gap); }
+.thumb-wrap { position: relative; line-height: 0; }
+.thumb { height: 64px; width: auto; border: var(--border-w) solid var(--border-color); cursor: pointer; }
+.thumb.active { outline: var(--stop-border-w) solid var(--accent); }
+.thumb-x {
+  position: absolute; top: 2px; right: 2px;
+  width: 18px; height: 18px; padding: 0;
+  border: var(--border-w) solid var(--white); border-radius: var(--radius-pill);
+  background: rgba(0, 0, 0, .6); color: var(--white);
+  font-size: 12px; line-height: 1; cursor: pointer;
+}
+.thumb-x:hover { background: rgba(0, 0, 0, .85); }
 
 .previews { display: flex; gap: var(--gap); flex-wrap: wrap; }
-.previews figure, #targetFig { margin: 0; flex: 1 1 var(--col-basis); min-width: 0; }
-.previews figcaption, #targetFig figcaption { font-size: var(--font-small); }
-.previews canvas, #cTarget { width: 100%; height: auto; }
+.previews figure { margin: 0; flex: 1 1 var(--col-basis); min-width: 0; }
+.previews figcaption { font-size: var(--font-small); }
+.previews canvas { width: 100%; height: auto; }
 
 #gradbar { width: 100%; height: var(--gradbar-h); margin-top: var(--gap); border: var(--border-w) solid var(--border-color); }
 
