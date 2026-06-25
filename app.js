@@ -191,10 +191,15 @@
   // (red/orange/yellow), -1 favors cool (cyan/blue/green), 0 is neutral. Used
   // to spin off warm/balanced/cool variations of the same palette. warmth peaks
   // (+1) at orange (hue 0.08 turns) and bottoms (-1) at its opposite (~cyan).
-  function hueWeight(hb, HB, hueBias) {
+  // Temperature preference for a hue bin, used to spin off warm/cool variations.
+  // Exponential (not linear) so it's strong enough to let a cool minority hue
+  // beat a much heavier warm cluster: at hueBias -3, a cool bin is exp(3)≈20×
+  // favored and a warm bin exp(-3)≈0.05× — a ~400× swing. warmth peaks (+1) at
+  // orange (hue 0.08 turns), bottoms (-1) at its opposite (~cyan). 0 = neutral.
+  function hueTemp(hb, HB, hueBias) {
     if (!hueBias) return 1;
     var warmth = Math.cos(2 * Math.PI * ((hb + 0.5) / HB - 0.08));
-    return 1 + hueBias * warmth;
+    return Math.exp(hueBias * warmth);
   }
   function analyzeImage(im, N, accentMix, hueBias) {
     var maxDim = 500, scale = Math.min(1, maxDim / Math.max(im.width, im.height));
@@ -204,7 +209,10 @@
     wctx.drawImage(im, 0, 0, w, h);
     var data = wctx.getImageData(0, 0, w, h).data;
 
-    var chromaPow = 1 + accentMix * 3;   // 1 (plain) .. 4 (very selective)
+    // For the warm/cool variations use a gentler chroma power so faint hues (a
+    // pale blue mist) aren't annihilated before the temperature bias can favor
+    // them; the neutral pass keeps the slider-driven selectivity.
+    var chromaPow = hueBias ? 1.2 : 1 + accentMix * 3;   // 1 (plain) .. 4 (very selective)
     var HB = 24;                          // hue bins (15° each) — enough to separate blue from orange
     // tot[L]  = [sumR, sumG, sumB, count]  — plain tone average
     // hist[L] = HB groups of [wR, wG, wB, w], colors weighted by saturation^chromaPow
@@ -259,13 +267,23 @@
         var hk = hist[k]; for (var q = 0; q < HB * 4; q++) acc[q] += hk[q];
       }
       var meanCol = mN ? [mR / mN, mG / mN, mB / mN] : nearest(center);
-      // dominant hue, pooled with neighbors so a cluster split across a bin edge isn't penalized
-      var best = -1, bestW = 0;
+      // pooled weight per hue bin (neighbors included so a cluster split across a
+      // bin edge isn't penalized), plus the heaviest bin for the presence floor
+      var poolW = new Array(HB), maxW = 0;
       for (var hb = 0; hb < HB; hb++) {
-        var score = (acc[hb * 4 + 3]
-          + 0.5 * (acc[((hb - 1 + HB) % HB) * 4 + 3] + acc[((hb + 1) % HB) * 4 + 3]))
-          * hueWeight(hb, HB, hueBias);
-        if (score > bestW) { bestW = score; best = hb; }
+        poolW[hb] = acc[hb * 4 + 3]
+          + 0.5 * (acc[((hb - 1 + HB) % HB) * 4 + 3] + acc[((hb + 1) % HB) * 4 + 3]);
+        if (poolW[hb] > maxW) maxW = poolW[hb];
+      }
+      // dominant hue. Neutral pass: plain weighted winner. Warm/cool variations:
+      // among hues that actually carry presence (>= 4% of the heaviest bin), pick
+      // the one the temperature bias most favors — so a real but minority cool
+      // hue can win a band, while stray pixels can't.
+      var floor = hueBias ? maxW * 0.04 : 0, best = -1, bestScore = 0;
+      for (var hb2 = 0; hb2 < HB; hb2++) {
+        if (poolW[hb2] < floor) continue;
+        var score = poolW[hb2] * hueTemp(hb2, HB, hueBias);
+        if (score > bestScore) { bestScore = score; best = hb2; }
       }
       var accentCol = meanCol;
       if (best >= 0) {
@@ -351,7 +369,7 @@
   // The three warm/balanced/cool variation ramps, cached so the fog panels and
   // export don't re-extract on every blend tick or stop drag. Recomputed only
   // when an extraction input changes (Colors/Color/Saturation/B&W/OKLab/Mirror).
-  var BIASES = { warm: 0.7, balanced: 0, cool: -0.7 };
+  var BIASES = { warm: 3, balanced: 0, cool: -3 };
   function updateVariations() {
     if (!state.img) { state.varRamps = null; return; }
     state.varRamps = { warm: rampForBias(BIASES.warm), balanced: rampForBias(BIASES.balanced), cool: rampForBias(BIASES.cool) };
@@ -654,7 +672,7 @@
   els.exportVars.addEventListener("click", function () {
     if (!state.img) return;
     var size = parseInt(els.lutSize.value, 10);
-    var variants = [{ n: "warm", b: 0.7 }, { n: "balanced", b: 0 }, { n: "cool", b: -0.7 }];
+    var variants = [{ n: "warm", b: BIASES.warm }, { n: "balanced", b: BIASES.balanced }, { n: "cool", b: BIASES.cool }];
     var files = [], pending = variants.length;
     variants.forEach(function (v) {
       var ramp = rampForBias(v.b);
