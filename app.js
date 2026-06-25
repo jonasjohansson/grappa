@@ -63,6 +63,7 @@
     temp: $("temp"), tval: $("tval"),
     sat: $("sat"), sval: $("sval"),
     blend: $("blend"), bval: $("bval"),
+    carry: $("carry"), cval: $("cval"),
     oklab: $("oklab"), mirror: $("mirror"), keepbw: $("keepbw"),
     cOrig: $("cOrig"), cGraded: $("cGraded"),
     cFogWarm: $("cFogWarm"), cFogBal: $("cFogBal"), cFogCool: $("cFogCool"),
@@ -83,7 +84,8 @@
   // ---------- settings + image persistence ----------
   function loadSettings() {
     [["gm_ncolors", els.ncolors, els.nval], ["gm_accent", els.accent, els.aval],
-     ["gm_temp", els.temp, els.tval], ["gm_sat", els.sat, els.sval], ["gm_blend", els.blend, els.bval]].forEach(function (s) {
+     ["gm_temp", els.temp, els.tval], ["gm_sat", els.sat, els.sval], ["gm_blend", els.blend, els.bval],
+     ["gm_carry", els.carry, els.cval]].forEach(function (s) {
       var v = localStorage.getItem(s[0]);
       if (v !== null) { s[1].value = v; s[2].textContent = v; }
     });
@@ -179,6 +181,10 @@
   els.blend.addEventListener("input", function () {
     els.bval.textContent = els.blend.value; localStorage.setItem("gm_blend", els.blend.value);
     renderGraded(); renderFog();
+  });
+  els.carry.addEventListener("input", function () {
+    els.cval.textContent = els.carry.value; localStorage.setItem("gm_carry", els.carry.value);
+    renderGraded();
   });
   els.oklab.addEventListener("change", function () {
     localStorage.setItem("gm_oklab", els.oklab.checked ? "1" : "0"); updateVariations(); rebuildAndRender();
@@ -439,10 +445,23 @@
     var scale = Math.min(1, maxW / iw);
     canvas.width = Math.round(iw * scale); canvas.height = Math.round(ih * scale);
   }
+  function carryAmt() { return parseInt(els.carry.value, 10) / 100; }
+  // Map an input pixel to the painting's TONE for its brightness, then optionally
+  // carry the pixel's OWN hue/chroma (OKLab a/b) back in by 'carry'. carry=0 is a
+  // pure gradient-map (painting color). carry>0 keeps the footage's own color
+  // separation — so a near-white fog with a faint blue cast keeps that blue, and
+  // a colored shot no longer collapses to one color per brightness. This is what
+  // turns the .cube into a real 3D transform instead of the luminance diagonal.
+  function gradeColor(r, g, b, ramp) {
+    var tone = ramp[Math.round(lum(r, g, b))], carry = carryAmt();
+    if (carry <= 0) return tone;
+    var lt = rgbToOklab(tone), ls = rgbToOklab([r, g, b]);
+    return oklabToRgb([lt[0], lt[1] + (ls[1] - lt[1]) * carry, lt[2] + (ls[2] - lt[2]) * carry]);
+  }
   function applyRamp(img, blend) {
     var d = img.data;
     for (var p = 0; p < d.length; p += 4) {
-      var c = state.ramp[Math.round(lum(d[p], d[p + 1], d[p + 2]))];
+      var c = gradeColor(d[p], d[p + 1], d[p + 2], state.ramp);
       d[p] = c[0] * blend + d[p] * (1 - blend);
       d[p + 1] = c[1] * blend + d[p + 1] * (1 - blend);
       d[p + 2] = c[2] * blend + d[p + 2] * (1 - blend);
@@ -595,7 +614,7 @@
     var n = size - 1;
     for (var b = 0; b < size; b++) for (var g = 0; g < size; g++) for (var r = 0; r < size; r++) {
       var ri = r / n, gi = g / n, bi = b / n;
-      var c = ramp[Math.round(lum(ri * 255, gi * 255, bi * 255))];
+      var c = gradeColor(ri * 255, gi * 255, bi * 255, ramp);
       lines.push(
         ((c[0] / 255) * blend + ri * (1 - blend)).toFixed(6) + " " +
         ((c[1] / 255) * blend + gi * (1 - blend)).toFixed(6) + " " +
@@ -680,12 +699,13 @@
   function serialize() {
     return {
       s: state.stops.map(function (st) { return [Math.round(st.pos * 1000), Math.round(st.col[0]), Math.round(st.col[1]), Math.round(st.col[2])]; }),
-      b: parseInt(els.blend.value, 10), k: els.oklab.checked ? 1 : 0, m: els.mirror.checked ? 1 : 0, w: els.keepbw.checked ? 1 : 0, n: state.name
+      b: parseInt(els.blend.value, 10), k: els.oklab.checked ? 1 : 0, m: els.mirror.checked ? 1 : 0, w: els.keepbw.checked ? 1 : 0, c: parseInt(els.carry.value, 10), n: state.name
     };
   }
   function applyGradient(obj) {
     if (obj.s && obj.s.length) { state.stops = obj.s.map(function (a) { return { pos: a[0] / 1000, col: [a[1], a[2], a[3]] }; }); state.manual = true; }
     if (obj.b != null) { els.blend.value = obj.b; els.bval.textContent = obj.b; }
+    if (obj.c != null) { els.carry.value = obj.c; els.cval.textContent = obj.c; }
     if (obj.k != null) els.oklab.checked = !!obj.k;
     if (obj.m != null) els.mirror.checked = !!obj.m;
     if (obj.w != null) els.keepbw.checked = !!obj.w;
