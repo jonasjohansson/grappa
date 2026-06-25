@@ -49,7 +49,7 @@
     accent: $("accent"), aval: $("aval"),
     sat: $("sat"), sval: $("sval"),
     blend: $("blend"), bval: $("bval"),
-    oklab: $("oklab"), mirror: $("mirror"),
+    oklab: $("oklab"), mirror: $("mirror"), keepbw: $("keepbw"),
     combine: $("combine"), combineRow: $("combineRow"),
     thumbs: $("thumbs"),
     cOrig: $("cOrig"), cGraded: $("cGraded"),
@@ -78,6 +78,8 @@
     if (k !== null) els.oklab.checked = k === "1";
     var mr = localStorage.getItem("gm_mirror");
     if (mr !== null) els.mirror.checked = mr === "1";
+    var bw = localStorage.getItem("gm_keepbw");
+    if (bw !== null) els.keepbw.checked = bw === "1";
     var cm = localStorage.getItem("gm_combine");
     if (cm !== null) els.combine.value = cm;
     var ls = localStorage.getItem("gm_lutsize");
@@ -187,6 +189,9 @@
   });
   els.mirror.addEventListener("change", function () {
     localStorage.setItem("gm_mirror", els.mirror.checked ? "1" : "0"); rebuildAndRender();
+  });
+  els.keepbw.addEventListener("change", function () {
+    localStorage.setItem("gm_keepbw", els.keepbw.checked ? "1" : "0"); rebuildAndRender();
   });
   els.combine.addEventListener("change", function () {
     localStorage.setItem("gm_combine", els.combine.value); recompute();
@@ -365,8 +370,20 @@
     for (var i = 0; i < 256; i++) out[i] = ramp[255 - Math.abs(2 * i - 255)];
     return out;
   }
+  // Pin the gradient ends to true black/white so highlights and shadows stay
+  // clean: without this, anything brighter than the brightest extracted color
+  // clamps to it (a near-white fog floods to e.g. pink). The anchors are
+  // injected only here, never into state.stops, so the editable swatches stay
+  // purely the painting colors. Skip an end if a stop already sits at it.
+  function anchorBW(stops) {
+    var sorted = stops.slice().sort(function (a, b) { return a.pos - b.pos; });
+    if (sorted.length && sorted[0].pos > 0) sorted.unshift({ pos: 0, col: [0, 0, 0] });
+    if (sorted.length && sorted[sorted.length - 1].pos < 1) sorted.push({ pos: 1, col: [255, 255, 255] });
+    return sorted;
+  }
   function buildRampNow() {
-    var r = buildRamp(state.stops, els.oklab.checked);
+    var stops = els.keepbw.checked ? anchorBW(state.stops) : state.stops;
+    var r = buildRamp(stops, els.oklab.checked);
     return els.mirror.checked ? applyMirror(r) : r;
   }
   function rebuildAndRender() {
@@ -591,7 +608,7 @@
   function serialize() {
     return {
       s: state.stops.map(function (st) { return [Math.round(st.pos * 1000), Math.round(st.col[0]), Math.round(st.col[1]), Math.round(st.col[2])]; }),
-      b: parseInt(els.blend.value, 10), k: els.oklab.checked ? 1 : 0, m: els.mirror.checked ? 1 : 0, n: state.name
+      b: parseInt(els.blend.value, 10), k: els.oklab.checked ? 1 : 0, m: els.mirror.checked ? 1 : 0, w: els.keepbw.checked ? 1 : 0, n: state.name
     };
   }
   function applyGradient(obj) {
@@ -599,6 +616,7 @@
     if (obj.b != null) { els.blend.value = obj.b; els.bval.textContent = obj.b; }
     if (obj.k != null) els.oklab.checked = !!obj.k;
     if (obj.m != null) els.mirror.checked = !!obj.m;
+    if (obj.w != null) els.keepbw.checked = !!obj.w;
     if (obj.n) state.name = obj.n;
     els.controls.hidden = false; els.result.hidden = false; selIdx = null;
     rebuildAndRender();
