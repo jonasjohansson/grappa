@@ -191,7 +191,7 @@
     localStorage.setItem("gm_mirror", els.mirror.checked ? "1" : "0"); rebuildAndRender();
   });
   els.keepbw.addEventListener("change", function () {
-    localStorage.setItem("gm_keepbw", els.keepbw.checked ? "1" : "0"); rebuildAndRender();
+    localStorage.setItem("gm_keepbw", els.keepbw.checked ? "1" : "0"); recompute();
   });
   els.combine.addEventListener("change", function () {
     localStorage.setItem("gm_combine", els.combine.value); recompute();
@@ -352,12 +352,25 @@
   }
 
   // ---------- pipeline ----------
+  // Squeeze the palette into the middle and add true black at pos 0 / white at
+  // pos 1 as real (editable) stops. Without this, the extracted stops always
+  // span pos 0..1, so anything brighter than the lightest color clamps to it —
+  // a near-white fog floods to e.g. pink. With it, highlights stay white and
+  // shadows stay black; the painting colors live in the mids. BW_HEADROOM is
+  // how much of each end is reserved for the black/white shoulder.
+  var BW_HEADROOM = 0.08;
+  function withBW(stops) {
+    var m = BW_HEADROOM, span = 1 - 2 * m;
+    var inner = stops.map(function (s) { return { pos: m + s.pos * span, col: s.col }; });
+    return [{ pos: 0, col: [0, 0, 0] }].concat(inner, [{ pos: 1, col: [255, 255, 255] }]);
+  }
   function recompute() {
     if (!state.imgs.length) return;
     els.controls.hidden = false; els.result.hidden = false;
     state.stops = analyze(parseInt(els.ncolors.value, 10), parseInt(els.accent.value, 10) / 100);
     var satAmt = parseInt(els.sat.value, 10) / 100;
     if (satAmt !== 1) state.stops = state.stops.map(function (s) { return { pos: s.pos, col: saturate(s.col, satAmt) }; });
+    if (els.keepbw.checked) state.stops = withBW(state.stops);
     state.manual = false; selIdx = null;
     rebuildAndRender();
   }
@@ -370,20 +383,8 @@
     for (var i = 0; i < 256; i++) out[i] = ramp[255 - Math.abs(2 * i - 255)];
     return out;
   }
-  // Pin the gradient ends to true black/white so highlights and shadows stay
-  // clean: without this, anything brighter than the brightest extracted color
-  // clamps to it (a near-white fog floods to e.g. pink). The anchors are
-  // injected only here, never into state.stops, so the editable swatches stay
-  // purely the painting colors. Skip an end if a stop already sits at it.
-  function anchorBW(stops) {
-    var sorted = stops.slice().sort(function (a, b) { return a.pos - b.pos; });
-    if (sorted.length && sorted[0].pos > 0) sorted.unshift({ pos: 0, col: [0, 0, 0] });
-    if (sorted.length && sorted[sorted.length - 1].pos < 1) sorted.push({ pos: 1, col: [255, 255, 255] });
-    return sorted;
-  }
   function buildRampNow() {
-    var stops = els.keepbw.checked ? anchorBW(state.stops) : state.stops;
-    var r = buildRamp(stops, els.oklab.checked);
+    var r = buildRamp(state.stops, els.oklab.checked);
     return els.mirror.checked ? applyMirror(r) : r;
   }
   function rebuildAndRender() {
