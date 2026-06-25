@@ -47,6 +47,7 @@
     controls: $("controls"), result: $("result"),
     ncolors: $("ncolors"), nval: $("nval"),
     accent: $("accent"), aval: $("aval"),
+    temp: $("temp"), tval: $("tval"),
     sat: $("sat"), sval: $("sval"),
     blend: $("blend"), bval: $("bval"),
     oklab: $("oklab"), mirror: $("mirror"), keepbw: $("keepbw"),
@@ -69,7 +70,7 @@
   // ---------- settings + image persistence ----------
   function loadSettings() {
     [["gm_ncolors", els.ncolors, els.nval], ["gm_accent", els.accent, els.aval],
-     ["gm_sat", els.sat, els.sval], ["gm_blend", els.blend, els.bval]].forEach(function (s) {
+     ["gm_temp", els.temp, els.tval], ["gm_sat", els.sat, els.sval], ["gm_blend", els.blend, els.bval]].forEach(function (s) {
       var v = localStorage.getItem(s[0]);
       if (v !== null) { s[1].value = v; s[2].textContent = v; }
     });
@@ -160,6 +161,7 @@
   }
   bindExtract(els.ncolors, els.nval, "gm_ncolors");
   bindExtract(els.accent, els.aval, "gm_accent");
+  bindExtract(els.temp, els.tval, "gm_temp");
   bindExtract(els.sat, els.sval, "gm_sat");
   els.blend.addEventListener("input", function () {
     els.bval.textContent = els.blend.value; localStorage.setItem("gm_blend", els.blend.value);
@@ -374,10 +376,12 @@
     if (!state.img) { state.varRamps = null; return; }
     state.varRamps = { warm: rampForBias(BIASES.warm), balanced: rampForBias(BIASES.balanced), cool: rampForBias(BIASES.cool) };
   }
+  // Temperature slider (-100 cool … 0 … +100 warm) → hue bias for live extraction.
+  function tempBias() { return parseInt(els.temp.value, 10) / 100 * BIASES.warm; }
   function recompute() {
     if (!state.img) return;
     els.controls.hidden = false; els.result.hidden = false;
-    state.stops = extractStops(0);
+    state.stops = extractStops(tempBias());
     updateVariations();
     state.manual = false; selIdx = null;
     rebuildAndRender();
