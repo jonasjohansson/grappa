@@ -39,6 +39,19 @@
       linToS(-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s)
     ];
   }
+  // Unit vector pointing at "warm" (orange) in the OKLab a/b plane, so warmth is
+  // a smooth projection: orange ≈ +1, its opposite (blue) ≈ -1, and green (−a)
+  // also reads cool — fixing the old hue-bin scheme where green barely counted.
+  var WARM_DIR = (function () { var o = rgbToOklab([235, 150, 60]); var n = Math.hypot(o[1], o[2]) || 1; return [o[1] / n, o[2] / n]; })();
+  // small deterministic PRNG so k-means seeding is stable across re-extracts
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      var t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
 
   // ---------- elements ----------
   function $(id) { return document.getElementById(id); }
@@ -61,7 +74,7 @@
   };
 
   // ---------- state ----------
-  var state = { img: null, stops: [], ramp: null, varRamps: null, name: "grappa", manual: false };
+  var state = { img: null, samples: null, stops: [], ramp: null, varRamps: null, name: "grappa", manual: false };
   function activeImg() { return state.img; }
   var selIdx = null, drag = null;
 
@@ -121,9 +134,9 @@
     state.name = localStorage.getItem("gm_name") || "grappa";
     loadImages([single], function (imgs) {
       if (!imgs.length) return;
-      state.img = imgs[0];
+      state.img = imgs[0]; state.samples = null;
       if (analyzeAfter) { recompute(); }
-      else { els.result.hidden = false; updateVariations(); drawOriginal(); renderGraded(); renderFog(); }
+      else { els.result.hidden = false; ensureSamples(); updateVariations(); drawOriginal(); renderGraded(); renderFog(); }
     });
     return true;
   }
@@ -137,7 +150,7 @@
     loadImages([url], function (imgs) {
       URL.revokeObjectURL(url);
       if (!imgs.length) return;
-      state.img = imgs[0];
+      state.img = imgs[0]; state.samples = null;
       state.name = (imgFiles[0].name || "grappa").replace(/\.[^.]+$/, "") || "grappa";
       persistImages(); recompute();
     });
@@ -189,123 +202,88 @@
   // the single most-saturated hue cluster define the accent. A vivid minority
   // hue beats a majority of greys (greys carry ~no weight) but still yields to a
   // larger, equally-vivid cluster — the best a one-color-per-brightness LUT can do.
-  // hueBias tilts which hue wins each brightness band: +1 favors warm hues
-  // (red/orange/yellow), -1 favors cool (cyan/blue/green), 0 is neutral. Used
-  // to spin off warm/balanced/cool variations of the same palette. warmth peaks
-  // (+1) at orange (hue 0.08 turns) and bottoms (-1) at its opposite (~cyan).
-  // Temperature preference for a hue bin, used to spin off warm/cool variations.
-  // Exponential (not linear) so it's strong enough to let a cool minority hue
-  // beat a much heavier warm cluster: at hueBias -3, a cool bin is exp(3)≈20×
-  // favored and a warm bin exp(-3)≈0.05× — a ~400× swing. warmth peaks (+1) at
-  // orange (hue 0.08 turns), bottoms (-1) at its opposite (~cyan). 0 = neutral.
-  function hueTemp(hb, HB, hueBias) {
-    if (!hueBias) return 1;
-    var warmth = Math.cos(2 * Math.PI * ((hb + 0.5) / HB - 0.08));
-    return Math.exp(hueBias * warmth);
-  }
-  function analyzeImage(im, N, accentMix, hueBias) {
+  // ---------- palette extraction (OKLab weighted k-means) ----------
+  // Cache per-image OKLab samples so slider drags don't recompute cbrt's. Each
+  // pixel keeps its chroma (for the Color/vividness weight) and a warmth value
+  // (projection onto the OKLab warm axis, so blue AND green read cool) for the
+  // Temperature weight. Weights are applied later — only the geometry is cached.
+  function buildSamples(im) {
     var maxDim = 500, scale = Math.min(1, maxDim / Math.max(im.width, im.height));
     var w = Math.max(1, Math.round(im.width * scale)), h = Math.max(1, Math.round(im.height * scale));
     els.work.width = w; els.work.height = h;
-    var wctx = els.work.getContext("2d");
-    wctx.drawImage(im, 0, 0, w, h);
-    var data = wctx.getImageData(0, 0, w, h).data;
-
-    // For the warm/cool variations use a gentler chroma power so faint hues (a
-    // pale blue mist) aren't annihilated before the temperature bias can favor
-    // them; the neutral pass keeps the slider-driven selectivity.
-    var chromaPow = hueBias ? 1.2 : 1 + accentMix * 3;   // 1 (plain) .. 4 (very selective)
-    var HB = 24;                          // hue bins (15° each) — enough to separate blue from orange
-    // tot[L]  = [sumR, sumG, sumB, count]  — plain tone average
-    // hist[L] = HB groups of [wR, wG, wB, w], colors weighted by saturation^chromaPow
-    var tot = new Array(256), hist = new Array(256);
-    for (var i = 0; i < 256; i++) { tot[i] = [0, 0, 0, 0]; hist[i] = new Float64Array(HB * 4); }
-
+    var ctx = els.work.getContext("2d");
+    ctx.drawImage(im, 0, 0, w, h);
+    var data;
+    try { data = ctx.getImageData(0, 0, w, h).data; }
+    catch (e) { state.samples = null; return; }
+    var cap = w * h, La = new Float32Array(cap), aa = new Float32Array(cap), bb = new Float32Array(cap), ch = new Float32Array(cap), wm = new Float32Array(cap), m = 0;
     for (var p = 0; p < data.length; p += 4) {
       if (data[p + 3] < 8) continue;
-      var r = data[p], g = data[p + 1], b = data[p + 2];
-      var L = Math.round(lum(r, g, b));
-      var t = tot[L]; t[0] += r; t[1] += g; t[2] += b; t[3] += 1;
-      var mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
-      if (d === 0) continue;             // achromatic: no hue to bin
-      var hh;                            // hue in [0,1)
-      if (mx === r) hh = ((g - b) / d) % 6;
-      else if (mx === g) hh = (b - r) / d + 2;
-      else hh = (r - g) / d + 4;
-      hh /= 6; if (hh < 0) hh += 1;
-      var wc = Math.pow(d / 255, chromaPow);
-      var o = (Math.floor(hh * HB) % HB) * 4, ha = hist[L];
-      ha[o] += r * wc; ha[o + 1] += g * wc; ha[o + 2] += b * wc; ha[o + 3] += wc;
+      var lab = rgbToOklab([data[p], data[p + 1], data[p + 2]]);
+      var c = Math.hypot(lab[1], lab[2]);
+      La[m] = lab[0]; aa[m] = lab[1]; bb[m] = lab[2]; ch[m] = c;
+      wm[m] = c > 1e-4 ? (lab[1] * WARM_DIR[0] + lab[2] * WARM_DIR[1]) / c : 0;
+      m++;
     }
+    state.samples = { L: La, a: aa, b: bb, chroma: ch, warmth: wm, n: m };
+  }
+  function ensureSamples() { if (state.img && !state.samples) buildSamples(state.img); }
 
-    var avg = tot.map(function (f) { return f[3] ? [f[0] / f[3], f[1] / f[3], f[2] / f[3]] : null; });
-    function nearest(idx) {
-      for (var d = 0; d < 256; d++) {
-        if (idx - d >= 0 && avg[idx - d]) return avg[idx - d];
-        if (idx + d < 256 && avg[idx + d]) return avg[idx + d];
-      }
-      return [idx, idx, idx];
+  // Weighted k-means over OKLab. The per-pixel weight favours vivid colors
+  // (Color slider) and a warm/cool direction (Temperature), so a small but
+  // distinct blue/green region earns its OWN cluster centroid instead of being
+  // averaged into the warm bulk — which is what makes minority hues finally
+  // appear as real palette stops. Pixels are first collapsed into a coarse OKLab
+  // grid (a few hundred weighted points) so the clustering stays fast.
+  var CHROMA_REF = 0.13, VIVID_BOOST = 16;
+  function extractPalette(N, accentMix, tempBias) {
+    var S = state.samples; if (!S || !S.n) return [];
+    var GL = 18, GAB = 20, ABMIN = -0.33, ABSPAN = 0.66, cells = {};
+    for (var i = 0; i < S.n; i++) {
+      var cn = Math.min(1, S.chroma[i] / CHROMA_REF);
+      var wt = (1 + accentMix * VIVID_BOOST * cn * cn) * (tempBias ? Math.exp(tempBias * S.warmth[i]) : 1);
+      var li = Math.min(GL - 1, Math.max(0, Math.floor(S.L[i] * GL)));
+      var ai = Math.min(GAB - 1, Math.max(0, Math.floor((S.a[i] - ABMIN) / ABSPAN * GAB)));
+      var bi = Math.min(GAB - 1, Math.max(0, Math.floor((S.b[i] - ABMIN) / ABSPAN * GAB)));
+      var key = (li * GAB + ai) * GAB + bi, cell = cells[key];
+      if (!cell) cell = cells[key] = [0, 0, 0, 0];
+      cell[0] += S.L[i] * wt; cell[1] += S.a[i] * wt; cell[2] += S.b[i] * wt; cell[3] += wt;
     }
-    // robust luminance range (ignore ~0.5% outliers at each end)
-    var total = 0;
-    for (var ti = 0; ti < 256; ti++) total += tot[ti][3];
-    var Lmin = 0, Lmax = 255;
-    if (total > 0) {
-      var cut = total * 0.005, cum = 0;
-      for (var lo = 0; lo < 256; lo++) { cum += tot[lo][3]; if (cum >= cut) { Lmin = lo; break; } }
-      cum = 0;
-      for (var hi = 255; hi >= 0; hi--) { cum += tot[hi][3]; if (cum >= cut) { Lmax = hi; break; } }
-      if (Lmax <= Lmin) { Lmin = 0; Lmax = 255; }
+    var pts = [];
+    for (var k in cells) { var cl = cells[k]; if (cl[3] > 0) pts.push([cl[0] / cl[3], cl[1] / cl[3], cl[2] / cl[3], cl[3]]); }
+    if (!pts.length) return [];
+    var K = Math.min(N, pts.length), rand = mulberry32(0x9e3779b9);
+    function d2(p, c) { var dl = p[0] - c[0], da = p[1] - c[1], db = p[2] - c[2]; return dl * dl + da * da + db * db; }
+    // k-means++ seeding (chroma/weight-aware, deterministic)
+    var cents = [pts[Math.floor(rand() * pts.length)].slice(0, 3)];
+    while (cents.length < K) {
+      var dsum = 0, ds = pts.map(function (p) {
+        var best = Infinity; for (var c = 0; c < cents.length; c++) best = Math.min(best, d2(p, cents[c]));
+        var v = best * p[3]; dsum += v; return v;
+      });
+      var r = rand() * dsum, acc2 = 0, pick = pts.length - 1;
+      for (var j = 0; j < pts.length; j++) { acc2 += ds[j]; if (acc2 >= r) { pick = j; break; } }
+      cents.push(pts[pick].slice(0, 3));
     }
-    var stops = [];
-    var half = Math.max(1, Math.round((Lmax - Lmin) / (2 * (N - 1))));
-    for (var s = 0; s < N; s++) {
-      var pos = s / (N - 1);
-      var center = Math.round(Lmin + pos * (Lmax - Lmin));
-      var mR = 0, mG = 0, mB = 0, mN = 0, acc = new Float64Array(HB * 4);
-      for (var k = center - half; k <= center + half; k++) {
-        if (k < 0 || k >= 256) continue;
-        var fk = tot[k]; mR += fk[0]; mG += fk[1]; mB += fk[2]; mN += fk[3];
-        var hk = hist[k]; for (var q = 0; q < HB * 4; q++) acc[q] += hk[q];
+    // Lloyd's iterations
+    for (var it = 0; it < 16; it++) {
+      var sums = []; for (var s0 = 0; s0 < K; s0++) sums.push([0, 0, 0, 0]);
+      for (var pi = 0; pi < pts.length; pi++) {
+        var pp = pts[pi], bc = 0, bd = Infinity;
+        for (var c3 = 0; c3 < K; c3++) { var dd = d2(pp, cents[c3]); if (dd < bd) { bd = dd; bc = c3; } }
+        var sm = sums[bc]; sm[0] += pp[0] * pp[3]; sm[1] += pp[1] * pp[3]; sm[2] += pp[2] * pp[3]; sm[3] += pp[3];
       }
-      var meanCol = mN ? [mR / mN, mG / mN, mB / mN] : nearest(center);
-      // pooled weight per hue bin (neighbors included so a cluster split across a
-      // bin edge isn't penalized), plus the heaviest bin for the presence floor
-      var poolW = new Array(HB), maxW = 0;
-      for (var hb = 0; hb < HB; hb++) {
-        poolW[hb] = acc[hb * 4 + 3]
-          + 0.5 * (acc[((hb - 1 + HB) % HB) * 4 + 3] + acc[((hb + 1) % HB) * 4 + 3]);
-        if (poolW[hb] > maxW) maxW = poolW[hb];
-      }
-      // dominant hue. Neutral pass: plain weighted winner. Warm/cool variations:
-      // among hues that actually carry presence (>= 4% of the heaviest bin), pick
-      // the one the temperature bias most favors — so a real but minority cool
-      // hue can win a band, while stray pixels can't.
-      var floor = hueBias ? maxW * 0.04 : 0, best = -1, bestScore = 0;
-      for (var hb2 = 0; hb2 < HB; hb2++) {
-        if (poolW[hb2] < floor) continue;
-        var score = poolW[hb2] * hueTemp(hb2, HB, hueBias);
-        if (score > bestScore) { bestScore = score; best = hb2; }
-      }
-      var accentCol = meanCol;
-      if (best >= 0) {
-        var R = 0, G = 0, B = 0, W = 0;
-        [(best - 1 + HB) % HB, best, (best + 1) % HB].forEach(function (bin) {
-          var bo = bin * 4; R += acc[bo]; G += acc[bo + 1]; B += acc[bo + 2]; W += acc[bo + 3];
-        });
-        if (W > 0.001) accentCol = [R / W, G / W, B / W];
-      }
-      stops.push({ pos: pos, col: [
-        meanCol[0] + (accentCol[0] - meanCol[0]) * accentMix,
-        meanCol[1] + (accentCol[1] - meanCol[1]) * accentMix,
-        meanCol[2] + (accentCol[2] - meanCol[2]) * accentMix
-      ] });
+      for (var c4 = 0; c4 < K; c4++) if (sums[c4][3] > 0) cents[c4] = [sums[c4][0] / sums[c4][3], sums[c4][1] / sums[c4][3], sums[c4][2] / sums[c4][3]];
     }
+    // centroids -> stops, positioned by their luminance
+    var stops = cents.map(function (c) { var rgb = oklabToRgb(c); return { pos: lum(rgb[0], rgb[1], rgb[2]) / 255, col: rgb }; });
+    stops.sort(function (a, b) { return a.pos - b.pos; });
     return stops;
   }
 
   function analyze(N, accentMix, hueBias) {
-    return state.img ? analyzeImage(state.img, N, accentMix, hueBias) : [];
+    ensureSamples();
+    return extractPalette(N, accentMix, hueBias);
   }
 
   // ---------- ramp (linear or OKLab interpolation) ----------
