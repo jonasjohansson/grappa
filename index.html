@@ -19,15 +19,17 @@
     <div class="row">
       <label>Colors to pick: <span id="nval">6</span></label>
       <input type="range" id="ncolors" min="2" max="16" value="6">
+      <span class="hint">more colors &rarr; minority hues (blue/green) split into their own stops</span>
     </div>
     <div class="row">
-      <label>Color: <span id="aval">70</span>%</label>
+      <label>Vividness: <span id="aval">70</span>%</label>
       <input type="range" id="accent" min="0" max="100" value="70">
+      <span class="hint">0 = dominant tones only &middot; 100 = favor bold, saturated minority colors</span>
     </div>
     <div class="row">
       <label>Temperature: <span id="tval">0</span></label>
       <input type="range" id="temp" min="-100" max="100" value="0">
-      <span class="hint">&minus;100 cooler &middot; warmer +100 (biases which hue wins each tone)</span>
+      <span class="hint">&minus;100 cooler &middot; warmer +100 (weights warm vs cool color families)</span>
     </div>
     <div class="row">
       <label>Saturation: <span id="sval">100</span>%</label>
@@ -84,10 +86,10 @@
     <canvas id="gradbar" width="512" height="40"></canvas>
     <div id="stops"></div>
     <div class="row">
+      <button id="eyedrop" class="primary" title="Pick a color from the image and add it to the gradient at its brightness">&#9683; Eyedrop a color from the image</button>
       <button id="addStop">+ stop</button>
-      <button id="eyedrop">Eyedrop</button>
       <button id="reExtract">Re-extract</button>
-      <span class="hint">Eyedrop, then click the image to pick a color the auto-pass missed · drag / arrow keys to move · double-click to recolor · click + Delete to remove</span>
+      <span class="hint">Drag stops or use arrow keys to move &middot; double-click to recolor &middot; select + Delete to remove</span>
     </div>
     <div class="swatches" id="swatches"></div>
 

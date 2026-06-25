@@ -563,6 +563,7 @@
   function addColorStop(rgb) {
     state.stops.push({ pos: lum(rgb[0], rgb[1], rgb[2]) / 255, col: rgb.slice() });
     state.manual = true; selIdx = state.stops.length - 1; rebuildAndRender();
+    flash(els.eyedrop, "Added " + hex(rgb), "Eyedrop");
   }
   var eyedropArmed = false;
   function setArmed(on) {
@@ -581,12 +582,19 @@
     }
   });
   els.cOrig.addEventListener("click", function (e) {
-    if (!eyedropArmed || !els.cOrig.width) return;
+    var im = activeImg();
+    if (!eyedropArmed || !im) return;
+    // sample the FULL-RES original at the click, not the downscaled preview — so
+    // a thin misty detail gives its true hue/brightness, not a blurred average
     var rect = els.cOrig.getBoundingClientRect();
-    var x = Math.floor((e.clientX - rect.left) / rect.width * els.cOrig.width);
-    var y = Math.floor((e.clientY - rect.top) / rect.height * els.cOrig.height);
-    var px = els.cOrig.getContext("2d").getImageData(x, y, 1, 1).data;
-    addColorStop([px[0], px[1], px[2]]);
+    var x = Math.min(im.width - 1, Math.max(0, Math.floor((e.clientX - rect.left) / rect.width * im.width)));
+    var y = Math.min(im.height - 1, Math.max(0, Math.floor((e.clientY - rect.top) / rect.height * im.height)));
+    var c = document.createElement("canvas"); c.width = im.width; c.height = im.height;
+    var cx = c.getContext("2d"); cx.drawImage(im, 0, 0);
+    try {
+      var px = cx.getImageData(x, y, 1, 1).data;
+      addColorStop([px[0], px[1], px[2]]);
+    } catch (err) {}
     setArmed(false);
   });
   function openPicker(i) {
@@ -673,12 +681,14 @@
   els.exportVars.addEventListener("click", function () {
     if (!state.img) return;
     var size = parseInt(els.lutSize.value, 10);
-    var variants = [{ n: "warm", b: BIASES.warm }, { n: "balanced", b: BIASES.balanced }, { n: "cool", b: BIASES.cool }];
+    var variants = [{ n: "warm", ramp: rampForBias(BIASES.warm) }, { n: "balanced", ramp: rampForBias(BIASES.balanced) }, { n: "cool", ramp: rampForBias(BIASES.cool) }];
+    // if the user has hand-edited / eyedropped the gradient, include it too so
+    // those exact colors aren't silently dropped from the shipped files
+    if (state.manual) variants.push({ n: "edited", ramp: state.ramp });
     var files = [], pending = variants.length;
     variants.forEach(function (v) {
-      var ramp = rampForBias(v.b);
-      files.push({ name: state.name + "-" + v.n + ".cube", data: strToU8(buildCube(size, ramp)) });
-      gradientPngBlob(ramp, function (blob) {
+      files.push({ name: state.name + "-" + v.n + ".cube", data: strToU8(buildCube(size, v.ramp)) });
+      gradientPngBlob(v.ramp, function (blob) {
         blob.arrayBuffer().then(function (buf) {
           files.push({ name: state.name + "-" + v.n + ".png", data: new Uint8Array(buf) });
           if (--pending === 0) { download(state.name + "-variations.zip", zipStore(files)); flash(els.exportVars, "Exported zip", "Export 3 variations (zip)"); }

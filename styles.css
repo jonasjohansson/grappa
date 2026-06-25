@@ -107,6 +107,9 @@ canvas[hidden] { display: none; } /* author canvas{display:block} otherwise over
 .sw { font-size: var(--font-tiny); text-align: center; }
 .sw .chip { width: var(--chip-w); height: var(--chip-h); border: var(--border-w) solid var(--border-color); }
 
+button.primary { background: var(--accent); color: var(--white); border-color: var(--accent); font-weight: 600; }
+button.primary:hover { filter: brightness(1.08); }
+
 .picker { position: fixed; left: -9999px; width: 0; height: 0; opacity: 0; }
 
 /* eyedropper sampling */
