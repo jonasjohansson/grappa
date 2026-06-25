@@ -11,9 +11,10 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div id="drop">Drop, choose, or paste image(s) to add &mdash; build one gradient from the whole set</div>
-  <input type="file" id="file" accept="image/*" multiple hidden>
+  <div id="drop">Drop, choose, or paste an image &mdash; build a gradient map from its tones</div>
+  <input type="file" id="file" accept="image/*" hidden>
 
+  <div class="layout">
   <div id="controls" hidden>
     <div class="row">
       <label>Colors to pick: <span id="nval">6</span></label>
@@ -40,19 +41,9 @@
     <div class="row">
       <label><input type="checkbox" id="keepbw" checked> Preserve black &amp; white (keep highlights/shadows clean)</label>
     </div>
-    <div class="row" id="combineRow" hidden>
-      <label>Combine maps
-        <select id="combine">
-          <option value="sequence">Sequence (one map after another)</option>
-          <option value="blend">Blend (average tones)</option>
-        </select>
-      </label>
-      <span class="hint">Sequence runs each image's full gradient end-to-end · Blend averages them per brightness</span>
-    </div>
   </div>
 
   <div id="result" hidden>
-    <div id="thumbs" class="thumbs" hidden></div>
     <div class="previews">
       <figure>
         <figcaption>Original</figcaption>
@@ -64,10 +55,19 @@
       </figure>
     </div>
 
-    <div class="previews">
-      <figure id="fogFig">
-        <figcaption>Fog reference (graded) &mdash; procedural neutral fog, black to white</figcaption>
-        <canvas id="cFog" width="900" height="180"></canvas>
+    <figcaption class="fog-title">Fog reference &mdash; procedural neutral fog (black&rarr;white) graded by each variation</figcaption>
+    <div class="previews" id="fogRow">
+      <figure>
+        <figcaption>Warm</figcaption>
+        <canvas id="cFogWarm" width="600" height="170"></canvas>
+      </figure>
+      <figure>
+        <figcaption>Balanced</figcaption>
+        <canvas id="cFogBal" width="600" height="170"></canvas>
+      </figure>
+      <figure>
+        <figcaption>Cool</figcaption>
+        <canvas id="cFogCool" width="600" height="170"></canvas>
       </figure>
     </div>
 
@@ -91,10 +91,11 @@
       </label>
       <button id="dlCube">Download .cube LUT</button>
       <button id="dlPng">Download gradient PNG</button>
-      <button id="exportVars" title="Re-extract warm / balanced / cool hue-bias takes and download all three .cube LUTs">Export 3 variations</button>
+      <button id="exportVars" title="Bundle warm / balanced / cool hue-bias takes as .cube + .png in one zip">Export 3 variations (zip)</button>
       <button id="copyHex">Copy hex list</button>
       <button id="shareBtn">Copy share link</button>
     </div>
+  </div>
   </div>
 
 <input type="color" id="picker" class="picker">

@@ -50,9 +50,8 @@
     sat: $("sat"), sval: $("sval"),
     blend: $("blend"), bval: $("bval"),
     oklab: $("oklab"), mirror: $("mirror"), keepbw: $("keepbw"),
-    combine: $("combine"), combineRow: $("combineRow"),
-    thumbs: $("thumbs"),
-    cOrig: $("cOrig"), cGraded: $("cGraded"), cFog: $("cFog"),
+    cOrig: $("cOrig"), cGraded: $("cGraded"),
+    cFogWarm: $("cFogWarm"), cFogBal: $("cFogBal"), cFogCool: $("cFogCool"),
     gradbar: $("gradbar"), stops: $("stops"), swatches: $("swatches"),
     addStop: $("addStop"), eyedrop: $("eyedrop"), reExtract: $("reExtract"), picker: $("picker"),
     lutSize: $("lutSize"),
@@ -61,8 +60,8 @@
   };
 
   // ---------- state ----------
-  var state = { imgs: [], activeIdx: 0, stops: [], ramp: null, name: "grappa", manual: false };
-  function activeImg() { return state.imgs[state.activeIdx] || null; }
+  var state = { img: null, stops: [], ramp: null, varRamps: null, name: "grappa", manual: false };
+  function activeImg() { return state.img; }
   var selIdx = null, drag = null;
 
   function blendAmt() { return parseInt(els.blend.value, 10) / 100; }
@@ -80,8 +79,6 @@
     if (mr !== null) els.mirror.checked = mr === "1";
     var bw = localStorage.getItem("gm_keepbw");
     if (bw !== null) els.keepbw.checked = bw === "1";
-    var cm = localStorage.getItem("gm_combine");
-    if (cm !== null) els.combine.value = cm;
     var ls = localStorage.getItem("gm_lutsize");
     if (ls !== null) els.lutSize.value = ls;
   }
@@ -96,10 +93,11 @@
   }
   function persistImages() {
     try {
-      localStorage.setItem("gm_images", JSON.stringify(state.imgs.map(imgToDataURL)));
+      if (state.img) localStorage.setItem("gm_image", imgToDataURL(state.img));
+      else localStorage.removeItem("gm_image");
       localStorage.setItem("gm_name", state.name);
-      localStorage.removeItem("gm_image"); // retire old single-image key
-    } catch (e) { try { localStorage.removeItem("gm_images"); } catch (e2) {} }
+      localStorage.removeItem("gm_images"); // retire old multi-image key
+    } catch (e) { try { localStorage.removeItem("gm_image"); } catch (e2) {} }
   }
 
   // decode a list of data-URLs / object-URLs into Image objects, calling cb once
@@ -116,49 +114,32 @@
   }
 
   function restoreImages(analyzeAfter) {
-    var arr = null, raw = localStorage.getItem("gm_images");
-    if (raw) { try { arr = JSON.parse(raw); } catch (e) {} }
-    if (!arr) { var single = localStorage.getItem("gm_image"); if (single) arr = [single]; }
-    if (!arr || !arr.length) return false;
+    var single = localStorage.getItem("gm_image");
+    if (!single) { var raw = localStorage.getItem("gm_images"); if (raw) { try { var a = JSON.parse(raw); single = a && a[0]; } catch (e) {} } }
+    if (!single) return false;
     state.name = localStorage.getItem("gm_name") || "grappa";
-    loadImages(arr, function (imgs) {
+    loadImages([single], function (imgs) {
       if (!imgs.length) return;
-      state.imgs = imgs; state.activeIdx = 0;
+      state.img = imgs[0];
       if (analyzeAfter) { recompute(); }
-      else { els.result.hidden = false; renderThumbs(); drawOriginal(); renderGraded(); }
+      else { els.result.hidden = false; updateVariations(); drawOriginal(); renderGraded(); renderFog(); }
     });
     return true;
   }
 
   // ---------- source image load ----------
-  // append one or more dropped/chosen files to the source set, then re-extract;
-  // the gradient is rebuilt from every image, so you can build it up one at a time
+  // load one dropped/chosen/pasted image (replacing any current one) and re-extract
   function loadFiles(files) {
     var imgFiles = Array.prototype.filter.call(files || [], function (f) { return f && /^image\//.test(f.type); });
     if (!imgFiles.length) return;
-    var urls = imgFiles.map(function (f) { return URL.createObjectURL(f); });
-    loadImages(urls, function (imgs) {
-      urls.forEach(URL.revokeObjectURL);
+    var url = URL.createObjectURL(imgFiles[0]);
+    loadImages([url], function (imgs) {
+      URL.revokeObjectURL(url);
       if (!imgs.length) return;
-      if (!state.imgs.length) state.name = (imgFiles[0].name || "grappa").replace(/\.[^.]+$/, "") || "grappa";
-      state.imgs = state.imgs.concat(imgs);
-      state.activeIdx = state.imgs.length - 1; // preview the most recently added
+      state.img = imgs[0];
+      state.name = (imgFiles[0].name || "grappa").replace(/\.[^.]+$/, "") || "grappa";
       persistImages(); recompute();
     });
-  }
-  // drop an image from the set and re-extract (or reset to empty if it was the last)
-  function removeImage(i) {
-    state.imgs.splice(i, 1);
-    if (state.activeIdx > i) state.activeIdx--;
-    state.activeIdx = Math.max(0, Math.min(state.activeIdx, state.imgs.length - 1));
-    persistImages();
-    if (!state.imgs.length) {
-      state.stops = []; state.ramp = null;
-      els.controls.hidden = true; els.result.hidden = true;
-      renderThumbs();
-      return;
-    }
-    recompute();
   }
   function wireDrop(el, input, cb) {
     el.addEventListener("click", function () { input.click(); });
@@ -185,16 +166,13 @@
     renderGraded(); renderFog();
   });
   els.oklab.addEventListener("change", function () {
-    localStorage.setItem("gm_oklab", els.oklab.checked ? "1" : "0"); rebuildAndRender();
+    localStorage.setItem("gm_oklab", els.oklab.checked ? "1" : "0"); updateVariations(); rebuildAndRender();
   });
   els.mirror.addEventListener("change", function () {
-    localStorage.setItem("gm_mirror", els.mirror.checked ? "1" : "0"); rebuildAndRender();
+    localStorage.setItem("gm_mirror", els.mirror.checked ? "1" : "0"); updateVariations(); rebuildAndRender();
   });
   els.keepbw.addEventListener("change", function () {
     localStorage.setItem("gm_keepbw", els.keepbw.checked ? "1" : "0"); recompute();
-  });
-  els.combine.addEventListener("change", function () {
-    localStorage.setItem("gm_combine", els.combine.value); recompute();
   });
   els.lutSize.addEventListener("change", function () { localStorage.setItem("gm_lutsize", els.lutSize.value); });
   els.reExtract.addEventListener("click", function () { recompute(); });
@@ -306,29 +284,8 @@
     return stops;
   }
 
-  // Combine all source images into one set of stops, two ways:
-  //   sequence — concatenate each image's full gradient end-to-end, evenly spaced
-  //              across the ramp (image 1's palette, then image 2's, ...). Hues stay
-  //              intact because images never average into each other.
-  //   blend    — mean the stop colors per brightness band (equal weight per image).
-  //              Good for frames sharing a palette; muddies images of differing casts.
   function analyze(N, accentMix, hueBias) {
-    var per = state.imgs.map(function (im) { return analyzeImage(im, N, accentMix, hueBias); });
-    if (per.length <= 1) return per[0] || [];
-    if (els.combine.value === "sequence") {
-      var cols = [];
-      per.forEach(function (stops) { stops.forEach(function (st) { cols.push(st.col); }); });
-      return cols.map(function (col, m) {
-        return { pos: cols.length > 1 ? m / (cols.length - 1) : 0, col: col };
-      });
-    }
-    var out = [];
-    for (var s = 0; s < N; s++) {
-      var r = 0, g = 0, b = 0;
-      per.forEach(function (st) { r += st[s].col[0]; g += st[s].col[1]; b += st[s].col[2]; });
-      out.push({ pos: per[0][s].pos, col: [r / per.length, g / per.length, b / per.length] });
-    }
-    return out;
+    return state.img ? analyzeImage(state.img, N, accentMix, hueBias) : [];
   }
 
   // ---------- ramp (linear or OKLab interpolation) ----------
@@ -385,15 +342,25 @@
     return stops;
   }
   // Build a finished ramp (with OKLab/Mirror applied) from a fresh extraction at
-  // the given bias — used by the variations export without disturbing state.
+  // the given bias — used by the fog variation panels and the variations export
+  // without disturbing the live edited gradient.
   function rampForBias(hueBias) {
     var r = buildRamp(extractStops(hueBias), els.oklab.checked);
     return els.mirror.checked ? applyMirror(r) : r;
   }
+  // The three warm/balanced/cool variation ramps, cached so the fog panels and
+  // export don't re-extract on every blend tick or stop drag. Recomputed only
+  // when an extraction input changes (Colors/Color/Saturation/B&W/OKLab/Mirror).
+  var BIASES = { warm: 0.7, balanced: 0, cool: -0.7 };
+  function updateVariations() {
+    if (!state.img) { state.varRamps = null; return; }
+    state.varRamps = { warm: rampForBias(BIASES.warm), balanced: rampForBias(BIASES.balanced), cool: rampForBias(BIASES.cool) };
+  }
   function recompute() {
-    if (!state.imgs.length) return;
+    if (!state.img) return;
     els.controls.hidden = false; els.result.hidden = false;
     state.stops = extractStops(0);
+    updateVariations();
     state.manual = false; selIdx = null;
     rebuildAndRender();
   }
@@ -412,7 +379,6 @@
   }
   function rebuildAndRender() {
     state.ramp = buildRampNow();
-    renderThumbs();
     drawGradbar(); drawStops(); drawSwatches(); drawOriginal(); renderGraded(); renderFog();
   }
 
@@ -445,19 +411,27 @@
     for (var p = 0; p < base.length; p++) out[p] = Math.round((base[p] - mn) / rng * 255);
     return out;
   }
-  function renderFog() {
-    var c = els.cFog; if (!c || !state.ramp) return;
-    var w = c.width, h = c.height;
+  function renderFogInto(canvas, ramp) {
+    if (!canvas || !ramp) return;
+    var w = canvas.width, h = canvas.height;
     if (!fogBase || fogBase.length !== w * h) fogBase = genFog(w, h);
-    var ctx = c.getContext("2d"), img = ctx.createImageData(w, h), d = img.data, blend = blendAmt();
+    var ctx = canvas.getContext("2d"), img = ctx.createImageData(w, h), d = img.data, blend = blendAmt();
     for (var p = 0, q = 0; p < fogBase.length; p++, q += 4) {
-      var L = fogBase[p], col = state.ramp[L];
+      var L = fogBase[p], col = ramp[L];
       d[q] = col[0] * blend + L * (1 - blend);
       d[q + 1] = col[1] * blend + L * (1 - blend);
       d[q + 2] = col[2] * blend + L * (1 - blend);
       d[q + 3] = 255;
     }
     ctx.putImageData(img, 0, 0);
+  }
+  // Same fog texture graded by each variation, so the only difference you see is
+  // the warm/balanced/cool bias.
+  function renderFog() {
+    if (!state.varRamps) return;
+    renderFogInto(els.cFogWarm, state.varRamps.warm);
+    renderFogInto(els.cFogBal, state.varRamps.balanced);
+    renderFogInto(els.cFogCool, state.varRamps.cool);
   }
 
   // ---------- rendering ----------
@@ -500,33 +474,6 @@
       div.className = "sw";
       div.innerHTML = '<div class="chip" style="background:' + rgbCss(c) + '"></div><code>' + hex(c) + "</code>";
       els.swatches.appendChild(div);
-    });
-  }
-
-  // thumbnail strip of every source image: click to preview one, × to remove it
-  function renderThumbs() {
-    els.combineRow.hidden = state.imgs.length < 2; // combine mode only matters with 2+
-    els.thumbs.innerHTML = "";
-    if (!state.imgs.length) { els.thumbs.hidden = true; return; }
-    els.thumbs.hidden = false;
-    state.imgs.forEach(function (im, i) {
-      var size = 64, scale = Math.min(size / im.width, size / im.height);
-      var wrap = document.createElement("div");
-      wrap.className = "thumb-wrap";
-      var cv = document.createElement("canvas");
-      cv.width = Math.max(1, Math.round(im.width * scale));
-      cv.height = Math.max(1, Math.round(im.height * scale));
-      cv.className = "thumb" + (i === state.activeIdx ? " active" : "");
-      cv.title = "Preview this image";
-      cv.getContext("2d").drawImage(im, 0, 0, cv.width, cv.height);
-      cv.addEventListener("click", function () {
-        state.activeIdx = i; renderThumbs(); drawOriginal(); renderGraded();
-      });
-      var x = document.createElement("button");
-      x.className = "thumb-x"; x.type = "button"; x.title = "Remove from set"; x.textContent = "×";
-      x.addEventListener("click", function (e) { e.stopPropagation(); removeImage(i); });
-      wrap.appendChild(cv); wrap.appendChild(x);
-      els.thumbs.appendChild(wrap);
     });
   }
 
@@ -657,26 +604,68 @@
     return lines.join("\n") + "\n";
   }
   els.dlCube.addEventListener("click", function () { if (state.ramp) download(state.name + ".cube", new Blob([buildCube(parseInt(els.lutSize.value, 10))], { type: "text/plain" })); });
-  // Re-extract warm / balanced / cool takes from the source and download all
-  // three .cube LUTs. Freshly extracted, so manual stop edits aren't included —
-  // that's why this is a separate button from Download .cube above.
-  els.exportVars.addEventListener("click", function () {
-    if (!state.imgs.length) return;
-    var size = parseInt(els.lutSize.value, 10);
-    var variants = [{ name: "warm", bias: 0.7 }, { name: "balanced", bias: 0 }, { name: "cool", bias: -0.7 }];
-    variants.forEach(function (v, i) {
-      var cube = buildCube(size, rampForBias(v.bias));
-      // stagger so browsers don't drop the 2nd/3rd programmatic download
-      setTimeout(function () { download(state.name + "-" + v.name + ".cube", new Blob([cube], { type: "text/plain" })); }, i * 350);
-    });
-    flash(els.exportVars, "Exported 3", "Export 3 variations");
-  });
-  els.dlPng.addEventListener("click", function () {
-    if (!state.ramp) return;
+  // Render a ramp as a 1024×128 gradient strip PNG.
+  function gradientPngBlob(ramp, cb) {
     var c = document.createElement("canvas"); c.width = 1024; c.height = 128;
     var ctx = c.getContext("2d");
-    for (var x = 0; x < c.width; x++) { ctx.fillStyle = rgbCss(state.ramp[Math.floor(x / c.width * 256)]); ctx.fillRect(x, 0, 1, c.height); }
-    c.toBlob(function (blob) { download(state.name + "-gradient.png", blob); });
+    for (var x = 0; x < c.width; x++) { ctx.fillStyle = rgbCss(ramp[Math.floor(x / c.width * 256)]); ctx.fillRect(x, 0, 1, c.height); }
+    c.toBlob(cb);
+  }
+  els.dlPng.addEventListener("click", function () {
+    if (state.ramp) gradientPngBlob(state.ramp, function (blob) { download(state.name + "-gradient.png", blob); });
+  });
+  // --- minimal store-only (uncompressed) zip, so we can bundle files with no deps ---
+  function crc32(u8) {
+    var t = crc32.t;
+    if (!t) { t = crc32.t = []; for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } }
+    var crc = 0xFFFFFFFF;
+    for (var i = 0; i < u8.length; i++) crc = (crc >>> 8) ^ t[(crc ^ u8[i]) & 0xFF];
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+  function strToU8(s) { return new TextEncoder().encode(s); }
+  function zipStore(files) {
+    var enc = new TextEncoder(), chunks = [], central = [], offset = 0;
+    files.forEach(function (f) {
+      var name = enc.encode(f.name), data = f.data, crc = crc32(data);
+      var lh = new Uint8Array(30 + name.length), dv = new DataView(lh.buffer);
+      dv.setUint32(0, 0x04034b50, true); dv.setUint16(4, 20, true);
+      dv.setUint32(14, crc, true); dv.setUint32(18, data.length, true); dv.setUint32(22, data.length, true);
+      dv.setUint16(26, name.length, true); lh.set(name, 30);
+      chunks.push(lh, data);
+      var cd = new Uint8Array(46 + name.length), cv = new DataView(cd.buffer);
+      cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true);
+      cv.setUint32(16, crc, true); cv.setUint32(20, data.length, true); cv.setUint32(24, data.length, true);
+      cv.setUint16(28, name.length, true); cv.setUint32(42, offset, true); cd.set(name, 46);
+      central.push(cd);
+      offset += lh.length + data.length;
+    });
+    var cdSize = central.reduce(function (a, c) { return a + c.length; }, 0);
+    central.forEach(function (c) { chunks.push(c); });
+    var eocd = new Uint8Array(22), ev = new DataView(eocd.buffer);
+    ev.setUint32(0, 0x06054b50, true);
+    ev.setUint16(8, files.length, true); ev.setUint16(10, files.length, true);
+    ev.setUint32(12, cdSize, true); ev.setUint32(16, offset, true);
+    chunks.push(eocd);
+    return new Blob(chunks, { type: "application/zip" });
+  }
+  // Re-extract warm / balanced / cool takes and bundle all three as .cube + .png
+  // into one zip. Freshly extracted, so manual stop edits aren't included — that's
+  // why this is separate from the single-file Download buttons above.
+  els.exportVars.addEventListener("click", function () {
+    if (!state.img) return;
+    var size = parseInt(els.lutSize.value, 10);
+    var variants = [{ n: "warm", b: 0.7 }, { n: "balanced", b: 0 }, { n: "cool", b: -0.7 }];
+    var files = [], pending = variants.length;
+    variants.forEach(function (v) {
+      var ramp = rampForBias(v.b);
+      files.push({ name: state.name + "-" + v.n + ".cube", data: strToU8(buildCube(size, ramp)) });
+      gradientPngBlob(ramp, function (blob) {
+        blob.arrayBuffer().then(function (buf) {
+          files.push({ name: state.name + "-" + v.n + ".png", data: new Uint8Array(buf) });
+          if (--pending === 0) { download(state.name + "-variations.zip", zipStore(files)); flash(els.exportVars, "Exported zip", "Export 3 variations (zip)"); }
+        });
+      });
+    });
   });
   els.copyHex.addEventListener("click", function () {
     if (!state.stops.length) return;
