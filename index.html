@@ -64,6 +64,13 @@
       </figure>
     </div>
 
+    <div class="previews">
+      <figure id="fogFig">
+        <figcaption>Fog reference (graded) &mdash; procedural neutral fog, black to white</figcaption>
+        <canvas id="cFog" width="900" height="180"></canvas>
+      </figure>
+    </div>
+
     <canvas id="gradbar" width="512" height="40"></canvas>
     <div id="stops"></div>
     <div class="row">
@@ -84,6 +91,7 @@
       </label>
       <button id="dlCube">Download .cube LUT</button>
       <button id="dlPng">Download gradient PNG</button>
+      <button id="exportVars" title="Re-extract warm / balanced / cool hue-bias takes and download all three .cube LUTs">Export 3 variations</button>
       <button id="copyHex">Copy hex list</button>
       <button id="shareBtn">Copy share link</button>
     </div>

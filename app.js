@@ -52,11 +52,11 @@
     oklab: $("oklab"), mirror: $("mirror"), keepbw: $("keepbw"),
     combine: $("combine"), combineRow: $("combineRow"),
     thumbs: $("thumbs"),
-    cOrig: $("cOrig"), cGraded: $("cGraded"),
+    cOrig: $("cOrig"), cGraded: $("cGraded"), cFog: $("cFog"),
     gradbar: $("gradbar"), stops: $("stops"), swatches: $("swatches"),
     addStop: $("addStop"), eyedrop: $("eyedrop"), reExtract: $("reExtract"), picker: $("picker"),
     lutSize: $("lutSize"),
-    dlCube: $("dlCube"), dlPng: $("dlPng"), copyHex: $("copyHex"), shareBtn: $("shareBtn"),
+    dlCube: $("dlCube"), dlPng: $("dlPng"), exportVars: $("exportVars"), copyHex: $("copyHex"), shareBtn: $("shareBtn"),
     work: $("work")
   };
 
@@ -182,7 +182,7 @@
   bindExtract(els.sat, els.sval, "gm_sat");
   els.blend.addEventListener("input", function () {
     els.bval.textContent = els.blend.value; localStorage.setItem("gm_blend", els.blend.value);
-    renderGraded();
+    renderGraded(); renderFog();
   });
   els.oklab.addEventListener("change", function () {
     localStorage.setItem("gm_oklab", els.oklab.checked ? "1" : "0"); rebuildAndRender();
@@ -209,7 +209,16 @@
   // the single most-saturated hue cluster define the accent. A vivid minority
   // hue beats a majority of greys (greys carry ~no weight) but still yields to a
   // larger, equally-vivid cluster — the best a one-color-per-brightness LUT can do.
-  function analyzeImage(im, N, accentMix) {
+  // hueBias tilts which hue wins each brightness band: +1 favors warm hues
+  // (red/orange/yellow), -1 favors cool (cyan/blue/green), 0 is neutral. Used
+  // to spin off warm/balanced/cool variations of the same palette. warmth peaks
+  // (+1) at orange (hue 0.08 turns) and bottoms (-1) at its opposite (~cyan).
+  function hueWeight(hb, HB, hueBias) {
+    if (!hueBias) return 1;
+    var warmth = Math.cos(2 * Math.PI * ((hb + 0.5) / HB - 0.08));
+    return 1 + hueBias * warmth;
+  }
+  function analyzeImage(im, N, accentMix, hueBias) {
     var maxDim = 500, scale = Math.min(1, maxDim / Math.max(im.width, im.height));
     var w = Math.max(1, Math.round(im.width * scale)), h = Math.max(1, Math.round(im.height * scale));
     els.work.width = w; els.work.height = h;
@@ -275,8 +284,9 @@
       // dominant hue, pooled with neighbors so a cluster split across a bin edge isn't penalized
       var best = -1, bestW = 0;
       for (var hb = 0; hb < HB; hb++) {
-        var score = acc[hb * 4 + 3]
-          + 0.5 * (acc[((hb - 1 + HB) % HB) * 4 + 3] + acc[((hb + 1) % HB) * 4 + 3]);
+        var score = (acc[hb * 4 + 3]
+          + 0.5 * (acc[((hb - 1 + HB) % HB) * 4 + 3] + acc[((hb + 1) % HB) * 4 + 3]))
+          * hueWeight(hb, HB, hueBias);
         if (score > bestW) { bestW = score; best = hb; }
       }
       var accentCol = meanCol;
@@ -302,8 +312,8 @@
   //              intact because images never average into each other.
   //   blend    — mean the stop colors per brightness band (equal weight per image).
   //              Good for frames sharing a palette; muddies images of differing casts.
-  function analyze(N, accentMix) {
-    var per = state.imgs.map(function (im) { return analyzeImage(im, N, accentMix); });
+  function analyze(N, accentMix, hueBias) {
+    var per = state.imgs.map(function (im) { return analyzeImage(im, N, accentMix, hueBias); });
     if (per.length <= 1) return per[0] || [];
     if (els.combine.value === "sequence") {
       var cols = [];
@@ -364,13 +374,26 @@
     var inner = stops.map(function (s) { return { pos: m + s.pos * span, col: s.col }; });
     return [{ pos: 0, col: [0, 0, 0] }].concat(inner, [{ pos: 1, col: [255, 255, 255] }]);
   }
+  // Extract stops at a given warm/cool hueBias using the current Colors,
+  // Saturation and Preserve-B&W settings. hueBias 0 is the live look; ±values
+  // feed the warm/cool export variations.
+  function extractStops(hueBias) {
+    var stops = analyze(parseInt(els.ncolors.value, 10), parseInt(els.accent.value, 10) / 100, hueBias);
+    var satAmt = parseInt(els.sat.value, 10) / 100;
+    if (satAmt !== 1) stops = stops.map(function (s) { return { pos: s.pos, col: saturate(s.col, satAmt) }; });
+    if (els.keepbw.checked) stops = withBW(stops);
+    return stops;
+  }
+  // Build a finished ramp (with OKLab/Mirror applied) from a fresh extraction at
+  // the given bias — used by the variations export without disturbing state.
+  function rampForBias(hueBias) {
+    var r = buildRamp(extractStops(hueBias), els.oklab.checked);
+    return els.mirror.checked ? applyMirror(r) : r;
+  }
   function recompute() {
     if (!state.imgs.length) return;
     els.controls.hidden = false; els.result.hidden = false;
-    state.stops = analyze(parseInt(els.ncolors.value, 10), parseInt(els.accent.value, 10) / 100);
-    var satAmt = parseInt(els.sat.value, 10) / 100;
-    if (satAmt !== 1) state.stops = state.stops.map(function (s) { return { pos: s.pos, col: saturate(s.col, satAmt) }; });
-    if (els.keepbw.checked) state.stops = withBW(state.stops);
+    state.stops = extractStops(0);
     state.manual = false; selIdx = null;
     rebuildAndRender();
   }
@@ -390,7 +413,51 @@
   function rebuildAndRender() {
     state.ramp = buildRampNow();
     renderThumbs();
-    drawGradbar(); drawStops(); drawSwatches(); drawOriginal(); renderGraded();
+    drawGradbar(); drawStops(); drawSwatches(); drawOriginal(); renderGraded(); renderFog();
+  }
+
+  // ---------- fog reference ----------
+  // A built-in neutral test surface: smooth grayscale value-noise that looks
+  // like wispy fog and spans pure black to pure white, so you can see how the
+  // grade colors real foggy texture (and that black/white stay clean). It is
+  // reference-only — never analyzed, never part of the palette.
+  var fogBase = null;
+  function genFog(w, h) {
+    // value noise: each octave is a coarse random grid, smoothstep-interpolated
+    function octave(cell) {
+      var gw = Math.ceil(w / cell) + 2, gh = Math.ceil(h / cell) + 2, g = new Float32Array(gw * gh);
+      for (var i = 0; i < g.length; i++) g[i] = Math.random();
+      return function (x, y) {
+        var fx = x / cell, fy = y / cell, ix = Math.floor(fx), iy = Math.floor(fy);
+        var tx = fx - ix, ty = fy - iy;
+        tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+        var a = g[iy * gw + ix], b = g[iy * gw + ix + 1], c = g[(iy + 1) * gw + ix], d = g[(iy + 1) * gw + ix + 1];
+        return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
+      };
+    }
+    var o1 = octave(Math.max(8, w / 6)), o2 = octave(Math.max(6, w / 16)), o3 = octave(Math.max(4, w / 40));
+    var base = new Float32Array(w * h), mn = Infinity, mx = -Infinity;
+    for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) {
+      var v = o1(x, y) * 0.6 + o2(x, y) * 0.3 + o3(x, y) * 0.1;
+      base[y * w + x] = v; if (v < mn) mn = v; if (v > mx) mx = v;
+    }
+    var out = new Uint8Array(w * h), rng = (mx - mn) || 1;          // stretch to full 0..255
+    for (var p = 0; p < base.length; p++) out[p] = Math.round((base[p] - mn) / rng * 255);
+    return out;
+  }
+  function renderFog() {
+    var c = els.cFog; if (!c || !state.ramp) return;
+    var w = c.width, h = c.height;
+    if (!fogBase || fogBase.length !== w * h) fogBase = genFog(w, h);
+    var ctx = c.getContext("2d"), img = ctx.createImageData(w, h), d = img.data, blend = blendAmt();
+    for (var p = 0, q = 0; p < fogBase.length; p++, q += 4) {
+      var L = fogBase[p], col = state.ramp[L];
+      d[q] = col[0] * blend + L * (1 - blend);
+      d[q + 1] = col[1] * blend + L * (1 - blend);
+      d[q + 2] = col[2] * blend + L * (1 - blend);
+      d[q + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
   }
 
   // ---------- rendering ----------
@@ -574,13 +641,14 @@
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
   }
-  function buildCube(size) {
+  function buildCube(size, ramp) {
+    ramp = ramp || state.ramp;
     var blend = blendAmt();
     var lines = ["# Generated by Grappa", 'TITLE "' + state.name + '"', "LUT_3D_SIZE " + size, "DOMAIN_MIN 0.0 0.0 0.0", "DOMAIN_MAX 1.0 1.0 1.0"];
     var n = size - 1;
     for (var b = 0; b < size; b++) for (var g = 0; g < size; g++) for (var r = 0; r < size; r++) {
       var ri = r / n, gi = g / n, bi = b / n;
-      var c = state.ramp[Math.round(lum(ri * 255, gi * 255, bi * 255))];
+      var c = ramp[Math.round(lum(ri * 255, gi * 255, bi * 255))];
       lines.push(
         ((c[0] / 255) * blend + ri * (1 - blend)).toFixed(6) + " " +
         ((c[1] / 255) * blend + gi * (1 - blend)).toFixed(6) + " " +
@@ -589,6 +657,20 @@
     return lines.join("\n") + "\n";
   }
   els.dlCube.addEventListener("click", function () { if (state.ramp) download(state.name + ".cube", new Blob([buildCube(parseInt(els.lutSize.value, 10))], { type: "text/plain" })); });
+  // Re-extract warm / balanced / cool takes from the source and download all
+  // three .cube LUTs. Freshly extracted, so manual stop edits aren't included —
+  // that's why this is a separate button from Download .cube above.
+  els.exportVars.addEventListener("click", function () {
+    if (!state.imgs.length) return;
+    var size = parseInt(els.lutSize.value, 10);
+    var variants = [{ name: "warm", bias: 0.7 }, { name: "balanced", bias: 0 }, { name: "cool", bias: -0.7 }];
+    variants.forEach(function (v, i) {
+      var cube = buildCube(size, rampForBias(v.bias));
+      // stagger so browsers don't drop the 2nd/3rd programmatic download
+      setTimeout(function () { download(state.name + "-" + v.name + ".cube", new Blob([cube], { type: "text/plain" })); }, i * 350);
+    });
+    flash(els.exportVars, "Exported 3", "Export 3 variations");
+  });
   els.dlPng.addEventListener("click", function () {
     if (!state.ramp) return;
     var c = document.createElement("canvas"); c.width = 1024; c.height = 128;
